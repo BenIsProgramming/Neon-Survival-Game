@@ -29,6 +29,9 @@ class Player {
   Offset aimPosition = const Offset(0, 0);
   Offset lastMouseViewportPos = const Offset(400, 300);
 
+  String activeWeapon = 'blaster'; // 'blaster', 'spread', 'laser', 'plasma'
+  int ammo = 0;
+
   Player({
     required this.id,
     required this.name,
@@ -53,6 +56,8 @@ class Player {
     isAlive = true;
     lastShotTime = 0.0;
     invulnTimer = 0.0;
+    activeWeapon = 'blaster';
+    ammo = 0;
   }
 }
 
@@ -69,7 +74,8 @@ class NeonSurvivalEngine extends StatefulWidget {
   final bool screenShakeEnabled;
   final String colorblindFilter;
   final bool isHardcore;
-  final VoidCallback onQuit;
+  final String mapType;
+  final void Function(int targetPanel) onQuit;
 
   const NeonSurvivalEngine({
     Key? key,
@@ -79,6 +85,7 @@ class NeonSurvivalEngine extends StatefulWidget {
     required this.screenShakeEnabled,
     required this.colorblindFilter,
     required this.isHardcore,
+    required this.mapType,
     required this.onQuit,
   }) : super(key: key);
 
@@ -109,12 +116,16 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   late List<Player> _players;
   final List<_GameEnemy> _enemies = [];
   final List<_GameBullet> _bullets = [];
+  final List<_GamePickup> _pickups = [];
+  final List<Rect> _obstacles = [];
   final List<_VisualParticle> _particles = [];
   final Random _random = Random();
 
   int _enemyIdCounter = 0;
+  int _pickupIdCounter = 0;
   double _elapsedTime = 0.0;
   double _lastSpawnTime = 0.0;
+  double _lastPickupSpawnTime = 0.0; // spawn timer tracker for random pickups
   bool _isGameOver = false;
   bool _isPaused = false;
   bool _showSettingsInPause = false;
@@ -132,6 +143,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
 
   // Keyboard keys currently pressed
   final Set<LogicalKeyboardKey> _pressedKeys = {};
+  bool _isPrimaryMousePressed = false;
 
   final List<Color> _rainbowColors = [
     const Color(0xFFEF4444),
@@ -182,18 +194,73 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       final spawnPos = center + offsets[i % offsets.length];
       _players[i].reset(spawnPos.dx, spawnPos.dy, maxHp);
     }
+    _obstacles.clear();
+    if (widget.mapType == 'pillars') {
+      _obstacles.add(const Rect.fromLTWH(350, 250, 120, 120));
+      _obstacles.add(const Rect.fromLTWH(1130, 250, 120, 120));
+      _obstacles.add(const Rect.fromLTWH(350, 830, 120, 120));
+      _obstacles.add(const Rect.fromLTWH(1130, 830, 120, 120));
+    } else if (widget.mapType == 'cross') {
+      _obstacles.add(const Rect.fromLTWH(740, 100, 120, 300));
+      _obstacles.add(const Rect.fromLTWH(740, 800, 120, 300));
+      _obstacles.add(const Rect.fromLTWH(150, 540, 300, 120));
+      _obstacles.add(const Rect.fromLTWH(1150, 540, 300, 120));
+    }
     _isGameOver = false;
     _isPaused = false;
     _showSettingsInPause = false;
     _enemies.clear();
     _bullets.clear();
+    _pickups.clear();
     _particles.clear();
     _elapsedTime = 0.0;
     _lastSpawnTime = 0.0;
+    _lastPickupSpawnTime = 0.0;
     _enemyIdCounter = 0;
+    _pickupIdCounter = 0;
     _cameraX = (arenaWidth / 2) - 400.0;
     _cameraY = (arenaHeight / 2) - 300.0;
     _zoomLevel = 1.0;
+  }
+
+  Offset _resolveObstacleCollision(double cx, double cy, double radius) {
+    double newX = cx;
+    double newY = cy;
+
+    for (final rect in _obstacles) {
+      double px = newX.clamp(rect.left, rect.right);
+      double py = newY.clamp(rect.top, rect.bottom);
+
+      double dx = newX - px;
+      double dy = newY - py;
+      double dist = sqrt(dx * dx + dy * dy);
+
+      if (dist < radius) {
+        if (dist > 0) {
+          double nx = dx / dist;
+          double ny = dy / dist;
+          double pen = radius - dist;
+          newX += nx * pen;
+          newY += ny * pen;
+        } else {
+          double dl = newX - rect.left;
+          double dr = rect.right - newX;
+          double dt = newY - rect.top;
+          double db = rect.bottom - newY;
+          double minDist = min(min(dl, dr), min(dt, db));
+          if (minDist == dl) {
+            newX = rect.left - radius;
+          } else if (minDist == dr) {
+            newX = rect.right + radius;
+          } else if (minDist == dt) {
+            newY = rect.top - radius;
+          } else {
+            newY = rect.bottom + radius;
+          }
+        }
+      }
+    }
+    return Offset(newX, newY);
   }
 
   // Synthesized audio helper
@@ -300,9 +367,12 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
         p.x += dx;
         p.y += dy;
 
-        // Base arena boundary check
         p.x = p.x.clamp(20.0, arenaWidth - 20.0);
         p.y = p.y.clamp(20.0, arenaHeight - 20.0);
+
+        final resolved = _resolveObstacleCollision(p.x, p.y, 13.0);
+        p.x = resolved.dx;
+        p.y = resolved.dy;
       }
 
       // Update aim direction
@@ -324,7 +394,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       // Shooting mechanics
       bool wantsToShoot = false;
       if (p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
-        if (_pressedKeys.contains(LogicalKeyboardKey.space)) {
+        if (_pressedKeys.contains(LogicalKeyboardKey.space) || _isPrimaryMousePressed) {
           wantsToShoot = true;
         }
       } else {
@@ -341,7 +411,13 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
         }
       }
 
-      if (wantsToShoot && _elapsedTime - p.lastShotTime > 0.22) {
+      double fireDelay = p.activeWeapon == 'blaster'
+          ? 0.22
+          : (p.activeWeapon == 'spread'
+              ? 0.25
+              : (p.activeWeapon == 'laser' ? 0.14 : 0.5));
+
+      if (wantsToShoot && _elapsedTime - p.lastShotTime > fireDelay) {
         p.lastShotTime = _elapsedTime;
         _firePlayerBullet(p);
       }
@@ -363,11 +439,94 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       _spawnEnemy();
     }
 
+    // Random Pickup Spawning Over Time
+    if (_elapsedTime - _lastPickupSpawnTime > 13.0) {
+      _lastPickupSpawnTime = _elapsedTime;
+      double px = 120.0 + _random.nextDouble() * (arenaWidth - 240.0);
+      double py = 120.0 + _random.nextDouble() * (arenaHeight - 240.0);
+      _spawnPickupAt(px, py);
+    }
+
+    // 4b. Update Pickups
+    for (int i = _pickups.length - 1; i >= 0; i--) {
+      final p = _pickups[i];
+      p.timer -= dt;
+      if (p.timer <= 0.0) {
+        _pickups.removeAt(i);
+        continue;
+      }
+
+      for (final player in _players) {
+        if (!player.isAlive) continue;
+        double dx = p.x - player.x;
+        double dy = p.y - player.y;
+        double dist = sqrt(dx * dx + dy * dy);
+        
+        if (dist < 25.0) {
+          if (p.type == 'health') {
+            if (player.health >= player.maxHealth) continue; 
+            player.health = min(player.maxHealth, player.health + 40.0);
+            _playSfx('playHit'); 
+          } else if (p.type == 'life') {
+            if (player.lives >= 5) continue; 
+            player.lives++;
+            _playSfx('playPowerUp');
+          } else {
+            player.activeWeapon = p.type;
+            player.ammo = p.ammoAmount;
+            _playSfx('playPowerUp');
+          }
+          _spawnLocalExplosion(p.x, p.y, p.type == 'health' ? Colors.greenAccent : (p.type == 'life' ? Colors.pinkAccent : Colors.yellowAccent), count: 12);
+          _pickups.removeAt(i);
+          break;
+        }
+      }
+    }
+
     // 4. Update Bullets
     for (int i = _bullets.length - 1; i >= 0; i--) {
       final b = _bullets[i];
       b.x += b.vx * dt;
       b.y += b.vy * dt;
+
+      bool hitWall = false;
+      for (final rect in _obstacles) {
+        if (rect.contains(Offset(b.x, b.y))) {
+          hitWall = true;
+          break;
+        }
+      }
+
+      if (hitWall) {
+        if (b.type == 'plasma') {
+          _spawnLocalExplosion(b.x, b.y, Colors.orangeAccent, count: 18);
+          _playSfx('playExplosion');
+          for (int k = _enemies.length - 1; k >= 0; k--) {
+            final targetEnemy = _enemies[k];
+            double pdx = b.x - targetEnemy.x;
+            double pdy = b.y - targetEnemy.y;
+            double pdist = sqrt(pdx * pdx + pdy * pdy);
+            double enemyRadius = targetEnemy.type == 'tank' ? 18.0 : 12.0;
+            if (pdist < 65.0 + enemyRadius) {
+              targetEnemy.health -= 4.0;
+              if (targetEnemy.health <= 0) {
+                _enemies.removeAt(k);
+                _playSfx('playExplosion');
+                if (b.owner != null) {
+                  b.owner!.score += targetEnemy.type == 'tank' ? 50 : (targetEnemy.type == 'shooter' ? 30 : 10);
+                  _rollPickupDrop(targetEnemy.x, targetEnemy.y, targetEnemy.type);
+                }
+                _spawnLocalExplosion(targetEnemy.x, targetEnemy.y, _rainbowColors[_random.nextInt(_rainbowColors.length)], count: 14);
+              }
+            }
+          }
+        } else {
+          _spawnLocalExplosion(b.x, b.y, b.isEnemy ? Colors.redAccent : Colors.cyanAccent, count: 4);
+          _playSfx('playHit');
+        }
+        _bullets.removeAt(i);
+        continue;
+      }
 
       if (b.x < -50 || b.x > arenaWidth + 50 || b.y < -50 || b.y > arenaHeight + 50) {
         _bullets.removeAt(i);
@@ -413,6 +572,11 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
         e.x = e.x.clamp(12.0, arenaWidth - 12.0);
         e.y = e.y.clamp(12.0, arenaHeight - 12.0);
       }
+
+      final enemyRadius = e.type == 'tank' ? 18.0 : 12.0;
+      final resolved = _resolveObstacleCollision(e.x, e.y, enemyRadius);
+      e.x = resolved.dx;
+      e.y = resolved.dy;
 
       double colDist = e.type == 'tank' ? 24.0 : 16.0;
       if (dist < colDist) {
@@ -469,26 +633,65 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       } else {
         for (int ei = _enemies.length - 1; ei >= 0; ei--) {
           final e = _enemies[ei];
+          
+          if (b.type == 'laser' && b.hitEnemyIds.contains(e.id)) continue;
+
           double dx = b.x - e.x;
           double dy = b.y - e.y;
           double dist = sqrt(dx * dx + dy * dy);
           double radius = e.type == 'tank' ? 18.0 : 12.0;
 
-          if (dist < radius) {
-            e.health -= 1.0;
-            _bullets.removeAt(bi);
-            _spawnLocalExplosion(b.x, b.y, _rainbowColors[_random.nextInt(_rainbowColors.length)], count: 4);
-            _playSfx('playHit');
+          if (dist < radius + (b.size - 4.0)) {
+            if (b.type == 'laser') {
+              b.hitEnemyIds.add(e.id);
+              e.health -= 1.0;
+              _spawnLocalExplosion(b.x, b.y, Colors.cyanAccent, count: 2);
+              _playSfx('playHit');
+            } else if (b.type == 'plasma') {
+              _bullets.removeAt(bi);
+              _spawnLocalExplosion(b.x, b.y, Colors.orangeAccent, count: 18);
+              _playSfx('playExplosion');
 
-            if (e.health <= 0) {
+              for (int k = _enemies.length - 1; k >= 0; k--) {
+                final targetEnemy = _enemies[k];
+                double pdx = b.x - targetEnemy.x;
+                double pdy = b.y - targetEnemy.y;
+                double pdist = sqrt(pdx * pdx + pdy * pdy);
+                double enemyRadius = targetEnemy.type == 'tank' ? 18.0 : 12.0;
+                if (pdist < 65.0 + enemyRadius) {
+                  targetEnemy.health -= 4.0;
+                  if (targetEnemy.health <= 0) {
+                    _enemies.removeAt(k);
+                    _playSfx('playExplosion');
+                    if (b.owner != null) {
+                      b.owner!.score += targetEnemy.type == 'tank' ? 50 : (targetEnemy.type == 'shooter' ? 30 : 10);
+                      _rollPickupDrop(targetEnemy.x, targetEnemy.y, targetEnemy.type);
+                    }
+                    _spawnLocalExplosion(targetEnemy.x, targetEnemy.y, _rainbowColors[_random.nextInt(_rainbowColors.length)], count: 14);
+                  }
+                }
+              }
+              break; 
+            } else {
+              e.health -= 1.0;
+              _bullets.removeAt(bi);
+              _spawnLocalExplosion(b.x, b.y, _rainbowColors[_random.nextInt(_rainbowColors.length)], count: 4);
+              _playSfx('playHit');
+            }
+
+            if (b.type != 'plasma' && e.health <= 0) {
               _enemies.removeAt(ei);
               _playSfx('playExplosion');
               if (b.owner != null) {
                 b.owner!.score += e.type == 'tank' ? 50 : (e.type == 'shooter' ? 30 : 10);
+                _rollPickupDrop(e.x, e.y, e.type);
               }
               _spawnLocalExplosion(e.x, e.y, _rainbowColors[_random.nextInt(_rainbowColors.length)], count: 18);
             }
-            break;
+
+            if (b.type != 'laser') {
+              break; 
+            }
           }
         }
       }
@@ -585,18 +788,79 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     dx /= dist;
     dy /= dist;
 
-    double speed = 500.0;
-    _bullets.add(_GameBullet(
-      x: p.x + dx * 16.0,
-      y: p.y + dy * 16.0,
-      vx: dx * speed,
-      vy: dy * speed,
-      isEnemy: false,
-      owner: p,
-    ));
+    double baseAngle = atan2(dy, dx);
 
-    _playSfx('playLaser');
-    _spawnLocalExplosion(p.x + dx * 16.0, p.y + dy * 16.0, p.color, count: 2);
+    if (p.activeWeapon == 'spread') {
+      double speed = 520.0;
+      final angles = [-15.0 * pi / 180.0, 0.0, 15.0 * pi / 180.0];
+      for (final offset in angles) {
+        double angle = baseAngle + offset;
+        _bullets.add(_GameBullet(
+          x: p.x + cos(angle) * 16.0,
+          y: p.y + sin(angle) * 16.0,
+          vx: cos(angle) * speed,
+          vy: sin(angle) * speed,
+          isEnemy: false,
+          owner: p,
+          type: 'spread',
+          size: 4.0,
+        ));
+      }
+      _playSfx('playLaser');
+      _spawnLocalExplosion(p.x + dx * 16.0, p.y + dy * 16.0, p.color, count: 3);
+    } else if (p.activeWeapon == 'laser') {
+      double speed = 900.0;
+      _bullets.add(_GameBullet(
+        x: p.x + dx * 16.0,
+        y: p.y + dy * 16.0,
+        vx: dx * speed,
+        vy: dy * speed,
+        isEnemy: false,
+        owner: p,
+        type: 'laser',
+        size: 3.5,
+      ));
+      _playSfx('playLaser');
+      _spawnLocalExplosion(p.x + dx * 16.0, p.y + dy * 16.0, Colors.blueAccent, count: 2);
+    } else if (p.activeWeapon == 'plasma') {
+      double speed = 330.0;
+      _bullets.add(_GameBullet(
+        x: p.x + dx * 16.0,
+        y: p.y + dy * 16.0,
+        vx: dx * speed,
+        vy: dy * speed,
+        isEnemy: false,
+        owner: p,
+        type: 'plasma',
+        size: 13.0,
+      ));
+      _playSfx('playExplosion');
+      _spawnLocalExplosion(p.x + dx * 16.0, p.y + dy * 16.0, Colors.orangeAccent, count: 4);
+    } else {
+      // Default blaster
+      double speed = 500.0;
+      _bullets.add(_GameBullet(
+        x: p.x + dx * 16.0,
+        y: p.y + dy * 16.0,
+        vx: dx * speed,
+        vy: dy * speed,
+        isEnemy: false,
+        owner: p,
+        type: 'blaster',
+        size: 4.0,
+      ));
+      _playSfx('playLaser');
+      _spawnLocalExplosion(p.x + dx * 16.0, p.y + dy * 16.0, p.color, count: 2);
+    }
+
+    // Ammo management
+    if (p.activeWeapon != 'blaster') {
+      p.ammo--;
+      if (p.ammo <= 0) {
+        p.activeWeapon = 'blaster';
+        _playSfx('playHit'); // play click / hit sound for out of ammo feedback
+      }
+    }
   }
 
   void _fireEnemyBullet(double sx, double sy, double tx, double ty) {
@@ -616,6 +880,44 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       vy: dy * speed,
       isEnemy: true,
     ));
+  }
+
+  void _rollPickupDrop(double x, double y, String enemyType) {
+    double roll = _random.nextDouble();
+    double threshold = 0.03; 
+    if (enemyType == 'shooter') threshold = 0.15;
+    else if (enemyType == 'tank') threshold = 0.10;
+    
+    if (roll < threshold) {
+      _spawnPickupAt(x, y);
+    }
+  }
+
+  void _spawnPickupAt(double x, double y) {
+    _pickupIdCounter++;
+    final List<String> pool = ['spread', 'laser', 'plasma'];
+    
+    if (!widget.isHardcore && widget.difficulty.toLowerCase() != 'hard') {
+      pool.add('health');
+      if (_random.nextDouble() < 0.25) {
+        pool.add('life');
+      }
+    }
+    
+    final type = pool[_random.nextInt(pool.length)];
+    int ammoAmount = 0;
+    if (type == 'spread') ammoAmount = 45;
+    else if (type == 'laser') ammoAmount = 60;
+    else if (type == 'plasma') ammoAmount = 20;
+
+    _pickups.add(_GamePickup(
+      id: _pickupIdCounter,
+      x: x,
+      y: y,
+      type: type,
+      ammoAmount: ammoAmount,
+    ));
+    _spawnLocalExplosion(x, y, Colors.white, count: 6);
   }
 
   void _spawnEnemy() {
@@ -710,7 +1012,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     int finalScore = (baseScore * multiplier).round();
     
     String playerNames = _players.map((p) => p.name).join(' & ');
-    LeaderboardManager.saveScore(playerNames, finalScore, _players.length);
+    LeaderboardManager.saveScore(playerNames, finalScore, _players.length, widget.difficulty, widget.isHardcore);
   }
 
   void _restartGame() {
@@ -847,12 +1149,32 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
                           child: GestureDetector(
                             onTapDown: (_) {
                               if (_isGameOver || _isPaused) return;
+                              setState(() {
+                                _isPrimaryMousePressed = true;
+                              });
                               for (final p in _players) {
                                 if (p.isAlive && p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
-                                  _firePlayerBullet(p);
-                                  p.lastShotTime = _elapsedTime;
+                                  double fireDelay = p.activeWeapon == 'blaster'
+                                      ? 0.22
+                                      : (p.activeWeapon == 'spread'
+                                          ? 0.25
+                                          : (p.activeWeapon == 'laser' ? 0.14 : 0.5));
+                                  if (_elapsedTime - p.lastShotTime > fireDelay) {
+                                    p.lastShotTime = _elapsedTime;
+                                    _firePlayerBullet(p);
+                                  }
                                 }
                               }
+                            },
+                            onTapUp: (_) {
+                              setState(() {
+                                _isPrimaryMousePressed = false;
+                              });
+                            },
+                            onTapCancel: () {
+                              setState(() {
+                                _isPrimaryMousePressed = false;
+                              });
                             },
                             child: Container(
                               width: w,
@@ -1010,8 +1332,13 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
           Row(
             children: [
               TextButton(
-                onPressed: widget.onQuit,
+                onPressed: () => widget.onQuit(0),
                 child: const Text('MAIN MENU', style: TextStyle(color: Colors.white70)),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () => widget.onQuit(2),
+                child: const Text('LEADERBOARD', style: TextStyle(color: Colors.amberAccent)),
               ),
               const SizedBox(width: 12),
               ElevatedButton(
@@ -1083,7 +1410,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
           });
         }, const Color(0xFF06B6D4)),
         const SizedBox(height: 14),
-        _buildPauseButton('ABANDON MISSION', widget.onQuit, const Color(0xFFEF4444)),
+        _buildPauseButton('ABANDON MISSION', () => widget.onQuit(0), const Color(0xFFEF4444)),
       ],
     );
   }
@@ -1297,11 +1624,15 @@ class _NeonSurvivalPainter extends CustomPainter {
     }
 
     for (final b in state._bullets) {
-      _drawSingleBullet(canvas, b.x, b.y, b.isEnemy, b.owner?.color);
+      _drawSingleBullet(canvas, b);
     }
 
     for (final e in state._enemies) {
       _drawSingleEnemy(canvas, e.x, e.y, e.health, e.maxHealth, e.type);
+    }
+
+    for (final pk in state._pickups) {
+      _drawSinglePickup(canvas, pk);
     }
 
     for (final p in state._players) {
@@ -1357,6 +1688,43 @@ class _NeonSurvivalPainter extends CustomPainter {
       for (int i = 0; i < p.lives; i++) {
         canvas.drawCircle(Offset(p.x - 14 + (i * 14), p.y - 36), 2.5, Paint()..color = pColor);
       }
+
+      if (p.activeWeapon != 'blaster') {
+        final ammoPainter = TextPainter(
+          text: TextSpan(
+            text: '${p.activeWeapon.toUpperCase()}:${p.ammo}',
+            style: TextStyle(
+              color: p.activeWeapon == 'spread'
+                  ? const Color(0xFFF59E0B)
+                  : (p.activeWeapon == 'laser' ? const Color(0xFF06B6D4) : const Color(0xFFEC4899)),
+              fontSize: 8,
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        );
+        ammoPainter.layout();
+        ammoPainter.paint(canvas, Offset(p.x - ammoPainter.width / 2, p.y + 20));
+      }
+    }
+
+    final Paint obstacleFillPaint = Paint()
+      ..color = const Color(0xFF0F172A).withOpacity(0.95)
+      ..style = PaintingStyle.fill;
+    final Paint obstacleBorderPaint = Paint()
+      ..color = const Color(0xFF334155)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    final Paint obstacleNeonPaint = Paint()
+      ..color = _getFilteredColor(const Color(0xFF06B6D4))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    for (final rect in state._obstacles) {
+      canvas.drawRect(rect, obstacleFillPaint);
+      canvas.drawRect(rect, obstacleBorderPaint);
+      canvas.drawRect(rect.deflate(2.0), obstacleNeonPaint);
     }
 
     canvas.drawRect(Rect.fromLTWH(0, 0, _NeonSurvivalEngineState.arenaWidth, _NeonSurvivalEngineState.arenaHeight), _borderPaint);
@@ -1448,16 +1816,16 @@ class _NeonSurvivalPainter extends CustomPainter {
     canvas.drawRect(rect, _portalLinePaint);
   }
 
-  void _drawSingleBullet(Canvas canvas, double bx, double by, bool isEnemy, Color? playerColor) {
-    final Color bulletColor = isEnemy ? const Color(0xFFEC4899) : (playerColor ?? const Color(0xFF06B6D4));
+  void _drawSingleBullet(Canvas canvas, _GameBullet b) {
+    final Color bulletColor = b.isEnemy ? const Color(0xFFEC4899) : (b.owner?.color ?? const Color(0xFF06B6D4));
     final Color shiftedColor = _getFilteredColor(bulletColor);
     
     _bulletPaint.color = shiftedColor;
     _bulletGlowPaint.color = shiftedColor.withOpacity(0.35);
     _bulletGlowPaint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
 
-    canvas.drawCircle(Offset(bx, by), 8.0, _bulletGlowPaint);
-    canvas.drawCircle(Offset(bx, by), 4.0, _bulletPaint);
+    canvas.drawCircle(Offset(b.x, b.y), b.size * 2.0, _bulletGlowPaint);
+    canvas.drawCircle(Offset(b.x, b.y), b.size, _bulletPaint);
   }
 
   void _drawSingleEnemy(Canvas canvas, double ex, double ey, double hp, double maxHp, String type) {
@@ -1508,6 +1876,82 @@ class _NeonSurvivalPainter extends CustomPainter {
     }
   }
 
+  void _drawSinglePickup(Canvas canvas, _GamePickup pk) {
+    if (pk.timer <= 3.0 && (pk.timer * 10).floor() % 2 == 0) {
+      return; 
+    }
+
+    Color col;
+    if (pk.type == 'health') {
+      col = const Color(0xFF10B981); 
+    } else if (pk.type == 'life') {
+      col = const Color(0xFFEC4899); 
+    } else if (pk.type == 'spread') {
+      col = const Color(0xFFF59E0B); 
+    } else if (pk.type == 'laser') {
+      col = const Color(0xFF06B6D4); 
+    } else {
+      col = const Color(0xFFD946EF); 
+    }
+
+    final Color shiftedColor = _getFilteredColor(col);
+    final Paint pFill = Paint()
+      ..color = shiftedColor.withOpacity(0.2)
+      ..style = PaintingStyle.fill;
+    final Paint pStroke = Paint()
+      ..color = shiftedColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    final Paint pGlow = Paint()
+      ..color = shiftedColor.withOpacity(0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+
+    double bounce = sin(state._elapsedTime * 4.0 + pk.id) * 3.0;
+    double px = pk.x;
+    double py = pk.y + bounce;
+
+    canvas.drawCircle(Offset(px, py), 16.0, pGlow);
+
+    if (pk.type == 'health') {
+      final rectH = Rect.fromLTWH(px - 10, py - 3, 20, 6);
+      final rectV = Rect.fromLTWH(px - 3, py - 10, 6, 20);
+      canvas.drawRect(rectH, pFill);
+      canvas.drawRect(rectH, pStroke);
+      canvas.drawRect(rectV, pFill);
+      canvas.drawRect(rectV, pStroke);
+    } else if (pk.type == 'life') {
+      final path = Path()
+        ..moveTo(px, py - 6)
+        ..cubicTo(px - 6, py - 13, px - 14, py - 7, px - 11, py)
+        ..lineTo(px, py + 9)
+        ..lineTo(px + 11, py)
+        ..cubicTo(px + 14, py - 7, px + 6, py - 13, px, py - 6)
+        ..close();
+      canvas.drawPath(path, pFill);
+      canvas.drawPath(path, pStroke);
+    } else if (pk.type == 'spread') {
+      final path = Path()
+        ..moveTo(px, py - 10)
+        ..lineTo(px + 9, py + 8)
+        ..lineTo(px - 9, py + 8)
+        ..close();
+      canvas.drawPath(path, pFill);
+      canvas.drawPath(path, pStroke);
+      canvas.drawCircle(Offset(px - 6, py + 3), 1.5, pStroke);
+      canvas.drawCircle(Offset(px, py - 3), 1.5, pStroke);
+      canvas.drawCircle(Offset(px + 6, py + 3), 1.5, pStroke);
+    } else if (pk.type == 'laser') {
+      canvas.drawRect(Rect.fromLTWH(px - 7, py - 9, 4, 18), pFill);
+      canvas.drawRect(Rect.fromLTWH(px - 7, py - 9, 4, 18), pStroke);
+      canvas.drawRect(Rect.fromLTWH(px + 3, py - 9, 4, 18), pFill);
+      canvas.drawRect(Rect.fromLTWH(px + 3, py - 9, 4, 18), pStroke);
+    } else {
+      canvas.drawCircle(Offset(px, py), 10.0, pFill);
+      canvas.drawCircle(Offset(px, py), 10.0, pStroke);
+      canvas.drawCircle(Offset(px, py), 3.0, pStroke);
+    }
+  }
+
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
@@ -1540,6 +1984,9 @@ class _GameBullet {
   double vy;
   final bool isEnemy;
   final Player? owner;
+  final String type; // 'blaster', 'spread', 'laser', 'plasma'
+  final Set<int> hitEnemyIds; // Tracks which enemies this piercing laser has already hit
+  final double size;
 
   _GameBullet({
     required this.x,
@@ -1548,6 +1995,27 @@ class _GameBullet {
     required this.vy,
     required this.isEnemy,
     this.owner,
+    this.type = 'blaster',
+    Set<int>? hitEnemyIds,
+    this.size = 4.0,
+  }) : this.hitEnemyIds = hitEnemyIds ?? {};
+}
+
+class _GamePickup {
+  final int id;
+  double x;
+  double y;
+  final String type; // 'health', 'life', 'spread', 'laser', 'plasma'
+  final int ammoAmount;
+  double timer;
+
+  _GamePickup({
+    required this.id,
+    required this.x,
+    required this.y,
+    required this.type,
+    required this.ammoAmount,
+    this.timer = 12.0,
   });
 }
 

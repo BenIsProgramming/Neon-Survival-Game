@@ -21,6 +21,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
   // Lobby Config
   String _difficulty = 'normal';
   bool _isHardcore = false;
+  String _mapType = 'grid'; // 'grid', 'pillars', 'cross'
   final List<bool> _slotsActive = [true, false, false, false];
   final List<String> _playerNames = ['P1_APEX', 'P2_NEON', 'P3_GLOW', 'P4_SPARK'];
   final List<Color> _playerColors = [
@@ -38,6 +39,11 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
 
   // Leaderboard data
   List<ScoreEntry> _highScores = [];
+
+  // Leaderboard filters
+  String _filterPlayers = 'all';
+  String _filterDifficulty = 'all';
+  String _filterHardcore = 'all';
 
   // Settings state variables
   double _sfxVolume = 0.7;
@@ -123,11 +129,12 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
           screenShakeEnabled: _screenShake,
           colorblindFilter: _colorblindFilter,
           isHardcore: _isHardcore,
-          onQuit: () {
+          mapType: _mapType,
+          onQuit: (targetPanel) {
             Navigator.pop(context);
             _loadHighScores();
             setState(() {
-              _activePanel = 0; // return to main title screen
+              _activePanel = targetPanel; // return to requested panel
             });
           },
         ),
@@ -312,7 +319,19 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
               _buildDiffOption('hard', const Color(0xFFEF4444)),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
+
+          // Map Selector
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('MAP DESIGN:  ', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 11)),
+              _buildMapOption('grid', 'EMPTY GRID', const Color(0xFF38BDF8)),
+              _buildMapOption('pillars', 'PILLARS', const Color(0xFFF59E0B)),
+              _buildMapOption('cross', 'CROSS WALLS', const Color(0xFFEC4899)),
+            ],
+          ),
+          const SizedBox(height: 6),
 
           // Hardcore Mode Selector Row
           Row(
@@ -390,6 +409,30 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
           color: isSelected ? Colors.white : Colors.white60,
           fontWeight: FontWeight.bold,
           fontSize: 11,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: BorderSide(color: isSelected ? activeColor : const Color(0xFF334155)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapOption(String mapType, String displayName, Color activeColor) {
+    bool isSelected = _mapType == mapType;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: ChoiceChip(
+        label: Text(displayName, style: const TextStyle(fontSize: 10)),
+        selected: isSelected,
+        onSelected: (val) {
+          if (val) setState(() => _mapType = mapType);
+        },
+        selectedColor: activeColor.withOpacity(0.35),
+        backgroundColor: const Color(0xFF0C1324),
+        labelStyle: TextStyle(
+          color: isSelected ? Colors.white : Colors.white60,
+          fontWeight: FontWeight.bold,
         ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
@@ -742,70 +785,159 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
               const SizedBox(width: 48),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 10),
+          // Dropdown filters row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildFilterDropdown('PLAYERS', _filterPlayers, {
+                'all': 'ALL',
+                '1': 'SOLO',
+                'coop': 'CO-OP',
+              }, (val) {
+                setState(() => _filterPlayers = val);
+              }),
+              _buildFilterDropdown('DIFFICULTY', _filterDifficulty, {
+                'all': 'ALL',
+                'easy': 'EASY',
+                'normal': 'NORMAL',
+                'hard': 'HARD',
+              }, (val) {
+                setState(() => _filterDifficulty = val);
+              }),
+              _buildFilterDropdown('MODE', _filterHardcore, {
+                'all': 'ALL',
+                'standard': 'STANDARD',
+                'hardcore': 'HARDCORE',
+              }, (val) {
+                setState(() => _filterHardcore = val);
+              }),
+            ],
+          ),
+          const SizedBox(height: 12),
           Expanded(
-            child: _highScores.isEmpty
-                ? const Center(child: Text('NO SYSTEM DATA REGISTERED.', style: TextStyle(color: Colors.white30, fontFamily: 'monospace')))
-                : ListView.builder(
-                    itemCount: _highScores.length,
-                    itemBuilder: (context, i) {
-                      final score = _highScores[i];
-                      return Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0A0F1D),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0xFF1E293B)),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: () {
+              final filteredScores = _highScores.where((score) {
+                if (_filterPlayers == '1' && score.playersCount != 1) return false;
+                if (_filterPlayers == 'coop' && score.playersCount <= 1) return false;
+                if (_filterDifficulty != 'all' && score.difficulty != _filterDifficulty) return false;
+                if (_filterHardcore == 'standard' && score.isHardcore) return false;
+                if (_filterHardcore == 'hardcore' && !score.isHardcore) return false;
+                return true;
+              }).toList();
+
+              if (filteredScores.isEmpty) {
+                return const Center(child: Text('NO DATA MATCHES FILTERS.', style: TextStyle(color: Colors.white30, fontFamily: 'monospace')));
+              }
+
+              return ListView.builder(
+                itemCount: filteredScores.length,
+                itemBuilder: (context, i) {
+                  final score = filteredScores[i];
+                  return Container(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A0F1D),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF1E293B)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
                           children: [
-                            Row(
-                              children: [
-                                SizedBox(
-                                  width: 24,
-                                  child: Text(
-                                    '#${i + 1}',
-                                    style: TextStyle(
-                                      color: i == 0 ? Colors.amberAccent : (i == 1 ? Colors.cyanAccent : Colors.white54),
-                                      fontWeight: FontWeight.bold,
-                                      fontFamily: 'monospace',
-                                    ),
-                                  ),
+                            SizedBox(
+                              width: 24,
+                              child: Text(
+                                '#${i + 1}',
+                                style: TextStyle(
+                                  color: i == 0 ? Colors.amberAccent : (i == 1 ? Colors.cyanAccent : Colors.white54),
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'monospace',
                                 ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  score.name,
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
-                                ),
-                                const SizedBox(width: 12),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.05),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    score.playersCount == 1 ? 'SOLO' : '${score.playersCount} CO-OP',
-                                    style: const TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              '${score.score} PTS',
-                              style: const TextStyle(
-                                color: Colors.cyanAccent,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
                               ),
-                            )
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              score.name,
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontFamily: 'monospace'),
+                            ),
+                            const SizedBox(width: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                score.playersCount == 1 ? 'SOLO' : '${score.playersCount} CO-OP',
+                                style: const TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: score.difficulty.toLowerCase() == 'easy'
+                                    ? const Color(0xFF10B981).withOpacity(0.15)
+                                    : (score.difficulty.toLowerCase() == 'hard'
+                                        ? const Color(0xFFEF4444).withOpacity(0.15)
+                                        : const Color(0xFF06B6D4).withOpacity(0.15)),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: score.difficulty.toLowerCase() == 'easy'
+                                      ? const Color(0xFF10B981)
+                                      : (score.difficulty.toLowerCase() == 'hard'
+                                          ? const Color(0xFFEF4444)
+                                          : const Color(0xFF06B6D4)),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Text(
+                                score.difficulty.toUpperCase(),
+                                style: TextStyle(
+                                  color: score.difficulty.toLowerCase() == 'easy'
+                                      ? const Color(0xFF10B981)
+                                      : (score.difficulty.toLowerCase() == 'hard'
+                                          ? const Color(0xFFEF4444)
+                                          : const Color(0xFF06B6D4)),
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            if (score.isHardcore) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEF4444).withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: const Color(0xFFEF4444), width: 1),
+                                ),
+                                child: const Text(
+                                  'HARDCORE',
+                                  style: TextStyle(color: Color(0xFFEF4444), fontSize: 8, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
-                      );
-                    },
-                  ),
+                        Text(
+                          '${score.score} PTS',
+                          style: const TextStyle(
+                            color: Colors.cyanAccent,
+                            fontWeight: FontWeight.bold,
+                            fontFamily: 'monospace',
+                          ),
+                        )
+                      ],
+                    ),
+                  );
+                },
+              );
+            }(),
           )
         ],
       ),
@@ -864,6 +996,58 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                   ),
                 ],
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterDropdown(
+    String label,
+    String currentValue,
+    Map<String, String> options,
+    ValueChanged<String> onChanged,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0C1324),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF334155), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              color: Colors.white30,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+            ),
+          ),
+          DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: currentValue,
+              icon: const Icon(Icons.arrow_drop_down, color: Colors.cyanAccent, size: 16),
+              dropdownColor: const Color(0xFF0A0F1D),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'monospace',
+              ),
+              items: options.entries.map((e) {
+                return DropdownMenuItem<String>(
+                  value: e.key,
+                  child: Text(e.value),
+                );
+              }).toList(),
+              onChanged: (val) {
+                if (val != null) onChanged(val);
+              },
             ),
           ),
         ],

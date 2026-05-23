@@ -5,12 +5,16 @@ class ScoreEntry {
   final String name;
   final int score;
   final int playersCount;
+  final String difficulty;
+  final bool isHardcore;
   final DateTime date;
 
   ScoreEntry({
     required this.name,
     required this.score,
     required this.playersCount,
+    this.difficulty = 'normal',
+    this.isHardcore = false,
     required this.date,
   });
 
@@ -18,6 +22,8 @@ class ScoreEntry {
     'name': name,
     'score': score,
     'playersCount': playersCount,
+    'difficulty': difficulty,
+    'isHardcore': isHardcore,
     'date': date.toIso8601String(),
   };
 
@@ -25,6 +31,8 @@ class ScoreEntry {
     name: json['name'] as String,
     score: json['score'] as int,
     playersCount: json['playersCount'] as int? ?? 1,
+    difficulty: json['difficulty'] as String? ?? 'normal',
+    isHardcore: json['isHardcore'] as bool? ?? false,
     date: DateTime.parse(json['date'] as String),
   );
 }
@@ -38,9 +46,9 @@ class LeaderboardManager {
     if (data == null) {
       // Default placeholder high scores for retro feel
       return [
-        ScoreEntry(name: 'APEX', score: 5000, playersCount: 1, date: DateTime.now()),
-        ScoreEntry(name: 'NEON', score: 3000, playersCount: 2, date: DateTime.now()),
-        ScoreEntry(name: 'GLOW', score: 1000, playersCount: 1, date: DateTime.now()),
+        ScoreEntry(name: 'APEX', score: 5000, playersCount: 1, difficulty: 'hard', isHardcore: true, date: DateTime.now()),
+        ScoreEntry(name: 'NEON', score: 3000, playersCount: 2, difficulty: 'normal', isHardcore: false, date: DateTime.now()),
+        ScoreEntry(name: 'GLOW', score: 1000, playersCount: 1, difficulty: 'easy', isHardcore: false, date: DateTime.now()),
       ];
     }
     try {
@@ -53,19 +61,21 @@ class LeaderboardManager {
     }
   }
 
-  static Future<void> saveScore(String name, int score, int playersCount) async {
+  static Future<void> saveScore(String name, int score, int playersCount, String difficulty, bool isHardcore) async {
     final scores = await getHighScores();
     scores.add(ScoreEntry(
       name: name.isEmpty ? 'ANON' : name.toUpperCase(),
       score: score,
       playersCount: playersCount,
+      difficulty: difficulty,
+      isHardcore: isHardcore,
       date: DateTime.now(),
     ));
     scores.sort((a, b) => b.score.compareTo(a.score));
     
-    // Keep top 10 scores
-    final top10 = scores.take(10).toList();
+    // Keep top 20 scores now that we can filter them! Let's expand this limit from 10 to 30.
+    final top30 = scores.take(30).toList();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_storageKey, json.encode(top10.map((e) => e.toJson()).toList()));
+    await prefs.setString(_storageKey, json.encode(top30.map((e) => e.toJson()).toList()));
   }
 }
