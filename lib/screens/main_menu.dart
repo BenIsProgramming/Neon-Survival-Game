@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -6,6 +8,7 @@ import '../game/input_profile.dart';
 import '../game/game_engine.dart';
 import '../game/leaderboard.dart';
 import '../game/audio_synth.dart' as synth;
+import '../game/window_settings.dart';
 
 class MainMenuScreen extends StatefulWidget {
   const MainMenuScreen({Key? key}) : super(key: key);
@@ -50,6 +53,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
   double _musicVolume = 0.5;
   bool _screenShake = true;
   String _colorblindFilter = 'none';
+  String _currentResolution = '1280x720';
+  bool _isFullscreen = false;
 
   @override
   void initState() {
@@ -71,11 +76,24 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
 
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
+    
+    bool isFS = false;
+    String res = '1280x720';
+    if (!kIsWeb) {
+      isFS = await isFullScreen();
+      final size = await getWindowSize();
+      int w = size['width']?.round() ?? 1280;
+      int h = size['height']?.round() ?? 720;
+      res = '${w}x${h}';
+    }
+
     setState(() {
       _sfxVolume = prefs.getDouble('neon_settings_sfx_volume') ?? 0.7;
       _musicVolume = prefs.getDouble('neon_settings_music_volume') ?? 0.5;
       _screenShake = prefs.getBool('neon_settings_screen_shake') ?? true;
       _colorblindFilter = prefs.getString('neon_settings_colorblind_filter') ?? 'none';
+      _isFullscreen = isFS;
+      _currentResolution = res;
 
       // Load lobby configuration
       _difficulty = prefs.getString('neon_lobby_difficulty') ?? 'normal';
@@ -168,6 +186,152 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
           },
         ),
       ),
+    );
+  }
+
+  Future<void> _changeVideoSettings({String? resolution, bool? fullscreen}) async {
+    // Save current states as backups
+    final String oldRes = _currentResolution;
+    final bool oldFS = _isFullscreen;
+    
+    // Parse current dimensions
+    final parts = _currentResolution.split('x');
+    double oldW = 1280;
+    double oldH = 720;
+    if (parts.length == 2) {
+      oldW = double.tryParse(parts[0]) ?? 1280;
+      oldH = double.tryParse(parts[1]) ?? 720;
+    }
+
+    // Apply new settings
+    String newRes = resolution ?? _currentResolution;
+    bool newFS = fullscreen ?? _isFullscreen;
+
+    double newW = oldW;
+    double newH = oldH;
+    if (resolution != null) {
+      final newParts = resolution.split('x');
+      if (newParts.length == 2) {
+        newW = double.tryParse(newParts[0]) ?? oldW;
+        newH = double.tryParse(newParts[1]) ?? oldH;
+      }
+    }
+
+    setState(() {
+      _currentResolution = newRes;
+      _isFullscreen = newFS;
+    });
+
+    if (resolution != null) {
+      await setWindowSize(newW, newH);
+    }
+    if (fullscreen != null) {
+      await setFullScreen(newFS);
+    }
+
+    // Show Confirmation Dialog
+    int countdown = 10;
+    Timer? countdownTimer;
+    bool confirmed = false;
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false, // User must choose KEEP or REVERT
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            countdownTimer ??= Timer.periodic(const Duration(seconds: 1), (timer) async {
+              if (countdown > 1) {
+                setDialogState(() {
+                  countdown--;
+                });
+              } else {
+                // Revert!
+                timer.cancel();
+                if (!confirmed) {
+                  Navigator.of(dialogContext).pop(); // Close dialog
+                  // Revert window size & fullscreen
+                  setState(() {
+                    _currentResolution = oldRes;
+                    _isFullscreen = oldFS;
+                  });
+                  await setWindowSize(oldW, oldH);
+                  await setFullScreen(oldFS);
+                }
+              }
+            });
+
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0F172A),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF1E293B), width: 2),
+              ),
+              title: const Text(
+                'CONFIRM VIDEO SETTINGS',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              content: Text(
+                'Do you want to keep these display settings?\n\nReverting to previous settings in $countdown seconds...',
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    confirmed = false;
+                    countdownTimer?.cancel();
+                    Navigator.of(dialogContext).pop();
+                    
+                    // Revert window size & fullscreen
+                    setState(() {
+                      _currentResolution = oldRes;
+                      _isFullscreen = oldFS;
+                    });
+                    await setWindowSize(oldW, oldH);
+                    await setFullScreen(oldFS);
+                  },
+                  child: const Text(
+                    'REVERT',
+                    style: TextStyle(
+                      color: Color(0xFFEF4444),
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF06B6D4),
+                  ),
+                  onPressed: () {
+                    confirmed = true;
+                    countdownTimer?.cancel();
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: const Text(
+                    'KEEP CHANGES',
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -699,7 +863,6 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                     child: DropdownButton<String>(
                       value: _colorblindFilter,
                       isExpanded: true,
-                      isDense: true,
                       dropdownColor: const Color(0xFF0F172A),
                       icon: const Padding(
                         padding: EdgeInsets.only(right: 16.0),
@@ -714,7 +877,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                         };
                         return itemsMap.entries.map<Widget>((e) {
                           return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            padding: const EdgeInsets.only(left: 16.0),
                             alignment: Alignment.centerLeft,
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -758,6 +921,115 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                     ),
                   ),
                 ),
+                if (!kIsWeb) ...[
+                  const SizedBox(height: 18),
+                  
+                  // Resolution Selection Card
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A0F1D),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF1E293B)),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _currentResolution,
+                        isExpanded: true,
+                        dropdownColor: const Color(0xFF0F172A),
+                        icon: const Padding(
+                          padding: EdgeInsets.only(right: 16.0),
+                          child: Icon(Icons.arrow_drop_down, color: Color(0xFF06B6D4)),
+                        ),
+                        selectedItemBuilder: (BuildContext context) {
+                          final resolutions = {
+                            '1024x768': '1024 x 768 (4:3)',
+                            '1280x720': '1280 x 720 (720p)',
+                            '1600x900': '1600 x 900 (16:9)',
+                            '1920x1080': '1920 x 1080 (1080p)',
+                          };
+                          if (!resolutions.containsKey(_currentResolution)) {
+                            resolutions[_currentResolution] = _currentResolution.replaceAll('x', ' x ');
+                          }
+                          return resolutions.entries.map<Widget>((e) {
+                            return Container(
+                              padding: const EdgeInsets.only(left: 16.0),
+                              alignment: Alignment.centerLeft,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  const Text(
+                                    'SCREEN RESOLUTION',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                  Text(
+                                    e.value,
+                                    style: const TextStyle(
+                                      color: Color(0xFF06B6D4),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }).toList();
+                        },
+                        items: (() {
+                          final resolutions = {
+                            '1024x768': '1024 x 768 (4:3)',
+                            '1280x720': '1280 x 720 (720p)',
+                            '1600x900': '1600 x 900 (16:9)',
+                            '1920x1080': '1920 x 1080 (1080p)',
+                          };
+                          if (!resolutions.containsKey(_currentResolution)) {
+                            resolutions[_currentResolution] = _currentResolution.replaceAll('x', ' x ');
+                          }
+                          return resolutions.entries.map((e) {
+                            return DropdownMenuItem(value: e.key, child: Text(e.value));
+                          }).toList();
+                        })(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            _changeVideoSettings(resolution: val);
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+
+                  // Fullscreen Toggle
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A0F1D),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF1E293B)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'FULLSCREEN MODE',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                        ),
+                        Switch(
+                          value: _isFullscreen,
+                          onChanged: (val) {
+                            _changeVideoSettings(fullscreen: val);
+                          },
+                          activeColor: const Color(0xFF06B6D4),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

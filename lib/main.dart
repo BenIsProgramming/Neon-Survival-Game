@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'screens/main_menu.dart';
+import 'game/window_settings.dart';
+import 'game/audio_synth.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initWindowManager();
+  await initAudioEngine();
   runApp(const NeonSurvivalApp());
 }
 

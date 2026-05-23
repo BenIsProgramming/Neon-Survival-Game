@@ -5,3 +5,7 @@ void playSfxImpl(String name, double volume) {
     js.context.callMethod(name, [volume]);
   } catch (_) {}
 }
+
+Future<void> initAudioEngineImpl() async {
+  // No-op on Web (initialized on user gesture)
+}
