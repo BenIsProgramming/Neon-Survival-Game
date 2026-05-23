@@ -83,7 +83,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
       _mapType = prefs.getString('neon_lobby_map_type') ?? 'grid';
       for (int i = 0; i < 4; i++) {
         _playerNames[i] = prefs.getString('neon_lobby_player_${i}_name') ?? _playerNames[i];
-        _slotsActive[i] = i == 0; // Force Slot 1 active, others inactive (multiplayer disabled)
+        _slotsActive[i] = prefs.getBool('neon_lobby_player_${i}_active') ?? (i == 0);
         final deviceName = prefs.getString('neon_lobby_player_${i}_device');
         if (deviceName != null) {
           final deviceType = InputDeviceType.values.firstWhere(
@@ -505,7 +505,12 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
               ),
               Switch(
                 value: active,
-                onChanged: null, // Disabled: multiplayer is disabled for now
+                onChanged: (val) {
+                  setState(() {
+                    _slotsActive[index] = val;
+                  });
+                  _saveLobbyConfig();
+                },
                 activeColor: pColor,
                 activeTrackColor: pColor.withOpacity(0.25),
                 inactiveThumbColor: Colors.grey,
@@ -518,7 +523,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
             const Expanded(
               child: Center(
                 child: Text(
-                  'DISABLED (SOLO)',
+                  'INACTIVE',
                   style: TextStyle(color: Colors.white24, fontWeight: FontWeight.bold, fontSize: 11),
                 ),
               ),
