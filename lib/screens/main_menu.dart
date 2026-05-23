@@ -5,7 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../game/input_profile.dart';
 import '../game/game_engine.dart';
 import '../game/leaderboard.dart';
-import 'dart:js' as js;
+import '../game/audio_synth.dart' as synth;
 
 class MainMenuScreen extends StatefulWidget {
   const MainMenuScreen({Key? key}) : super(key: key);
@@ -642,9 +642,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                       _sfxVolume = val;
                     });
                     // Play test beep on slide adjust
-                    try {
-                      js.context.callMethod('playLaser', [_sfxVolume]);
-                    } catch (_) {}
+                    synth.playSfx('playLaser', _sfxVolume);
                   },
                 ),
                 const SizedBox(height: 18),

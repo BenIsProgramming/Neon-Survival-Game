@@ -6,7 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'input_profile.dart';
 import 'leaderboard.dart';
-import 'dart:js' as js;
+import 'audio_synth.dart' as synth;
 
 class Player {
   final int id;
@@ -266,11 +266,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
 
   // Synthesized audio helper
   void _playSfx(String jsFunctionName) {
-    if (kIsWeb) {
-      try {
-        js.context.callMethod(jsFunctionName, [_activeSfxVolume]);
-      } catch (_) {}
-    }
+    synth.playSfx(jsFunctionName, _activeSfxVolume);
   }
 
   @override
