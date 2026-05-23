@@ -55,6 +55,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
   String _colorblindFilter = 'none';
   String _currentResolution = '1280x720';
   bool _isFullscreen = false;
+  bool _perfLogging = false;
 
   @override
   void initState() {
@@ -92,6 +93,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
       _musicVolume = prefs.getDouble('neon_settings_music_volume') ?? 0.5;
       _screenShake = prefs.getBool('neon_settings_screen_shake') ?? true;
       _colorblindFilter = prefs.getString('neon_settings_colorblind_filter') ?? 'none';
+      _perfLogging = prefs.getBool('neon_settings_perf_logging') ?? false;
       _isFullscreen = isFS;
       _currentResolution = res;
 
@@ -120,6 +122,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
     await prefs.setDouble('neon_settings_music_volume', _musicVolume);
     await prefs.setBool('neon_settings_screen_shake', _screenShake);
     await prefs.setString('neon_settings_colorblind_filter', _colorblindFilter);
+    await prefs.setBool('neon_settings_perf_logging', _perfLogging);
   }
 
   Future<void> _saveLobbyConfig() async {
@@ -177,6 +180,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
           colorblindFilter: _colorblindFilter,
           isHardcore: _isHardcore,
           mapType: _mapType,
+          perfLoggingEnabled: _perfLogging,
           onQuit: (targetPanel) {
             Navigator.pop(context);
             _loadHighScores();
@@ -206,6 +210,9 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
     // Apply new settings
     String newRes = resolution ?? _currentResolution;
     bool newFS = fullscreen ?? _isFullscreen;
+    if (resolution != null) {
+      newFS = false; // Selecting a resolution dropdown item switches to windowed mode
+    }
 
     double newW = oldW;
     double newH = oldH;
@@ -222,11 +229,12 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
       _isFullscreen = newFS;
     });
 
+    // Apply fullscreen mode first if changing fullscreen
+    if (newFS != oldFS) {
+      await setFullScreen(newFS);
+    }
     if (resolution != null) {
       await setWindowSize(newW, newH);
-    }
-    if (fullscreen != null) {
-      await setFullScreen(newFS);
     }
 
     // Show Confirmation Dialog
@@ -297,8 +305,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                       _currentResolution = oldRes;
                       _isFullscreen = oldFS;
                     });
+                    if (oldFS != _isFullscreen) {
+                      await setFullScreen(oldFS);
+                    }
                     await setWindowSize(oldW, oldH);
-                    await setFullScreen(oldFS);
                   },
                   child: const Text(
                     'REVERT',
@@ -843,6 +853,45 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                         onChanged: (val) {
                           setState(() {
                             _screenShake = val;
+                          });
+                        },
+                        activeColor: const Color(0xFF06B6D4),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                // Performance Logging Toggle
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0A0F1D),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF1E293B)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'PERFORMANCE LOGGING',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Show Performance HUD and log frame times to console',
+                            style: TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace'),
+                          ),
+                        ],
+                      ),
+                      Switch(
+                        value: _perfLogging,
+                        onChanged: (val) {
+                          setState(() {
+                            _perfLogging = val;
                           });
                         },
                         activeColor: const Color(0xFF06B6D4),

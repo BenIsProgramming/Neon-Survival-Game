@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -75,6 +76,7 @@ class NeonSurvivalEngine extends StatefulWidget {
   final String colorblindFilter;
   final bool isHardcore;
   final String mapType;
+  final bool perfLoggingEnabled;
   final void Function(int targetPanel) onQuit;
 
   const NeonSurvivalEngine({
@@ -86,6 +88,7 @@ class NeonSurvivalEngine extends StatefulWidget {
     required this.colorblindFilter,
     required this.isHardcore,
     required this.mapType,
+    this.perfLoggingEnabled = false,
     required this.onQuit,
   }) : super(key: key);
 
@@ -141,6 +144,14 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   double _cameraY = 0.0;
   double _zoomLevel = 1.0;
 
+  // Performance measurement variables
+  double _lastUpdateMs = 0.0;
+  double _lastPaintMs = 0.0;
+  final List<double> _fpsHistory = [];
+  final List<double> _updateMsHistory = [];
+  final List<double> _paintMsHistory = [];
+  Timer? _perfLogTimer;
+
   // Keyboard keys currently pressed
   final Set<LogicalKeyboardKey> _pressedKeys = {};
   bool _isPrimaryMousePressed = false;
@@ -172,6 +183,12 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     // Start game tick
     _ticker = createTicker(_onTick);
     _ticker.start();
+
+    if (widget.perfLoggingEnabled) {
+      _perfLogTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+        _logPerformanceData();
+      });
+    }
   }
 
   void _setupInitialPlayerStats() {
@@ -273,6 +290,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
+    _perfLogTimer?.cancel();
     super.dispose();
   }
 
@@ -291,6 +309,37 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     }
   }
 
+  void _logPerformanceData() {
+    if (_fpsHistory.isEmpty) return;
+    
+    final avgFps = _fpsHistory.reduce((a, b) => a + b) / _fpsHistory.length;
+    final maxFps = _fpsHistory.reduce(max);
+    final minFps = _fpsHistory.reduce(min);
+    
+    double avgUpdate = 0.0;
+    double maxUpdate = 0.0;
+    if (_updateMsHistory.isNotEmpty) {
+      avgUpdate = _updateMsHistory.reduce((a, b) => a + b) / _updateMsHistory.length;
+      maxUpdate = _updateMsHistory.reduce(max);
+    }
+
+    double avgPaint = 0.0;
+    double maxPaint = 0.0;
+    if (_paintMsHistory.isNotEmpty) {
+      avgPaint = _paintMsHistory.reduce((a, b) => a + b) / _paintMsHistory.length;
+      maxPaint = _paintMsHistory.reduce(max);
+    }
+
+    print('[PERF LOG] FPS: avg=${avgFps.toStringAsFixed(1)} (min=${minFps.toStringAsFixed(1)}, max=${maxFps.toStringAsFixed(1)}) | '
+          'Update: avg=${avgUpdate.toStringAsFixed(2)}ms (max=${maxUpdate.toStringAsFixed(2)}ms) | '
+          'Paint: avg=${avgPaint.toStringAsFixed(2)}ms (max=${maxPaint.toStringAsFixed(2)}ms) | '
+          'Enemies: ${_enemies.length} | Bullets: ${_bullets.length} | Particles: ${_particles.length}');
+    
+    _fpsHistory.clear();
+    _updateMsHistory.clear();
+    _paintMsHistory.clear();
+  }
+
   void _onTick(Duration duration) {
     if (!mounted) return;
 
@@ -304,11 +353,24 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     if (dt > 0.1) dt = 0.1;
     if (dt <= 0.0) dt = 0.01667;
 
+    // Track FPS
+    if (widget.perfLoggingEnabled) {
+      final currentFps = dt > 0 ? 1.0 / dt : 0.0;
+      _fpsHistory.add(currentFps);
+    }
+
+    final stopwatch = Stopwatch()..start();
     // Skip physical game loops when paused
     if (!_isPaused) {
       _updatePhysics(dt);
       _updateParticles(dt);
       _updateCamera();
+    }
+    stopwatch.stop();
+
+    if (widget.perfLoggingEnabled) {
+      _lastUpdateMs = stopwatch.elapsedMicroseconds / 1000.0;
+      _updateMsHistory.add(_lastUpdateMs);
     }
 
     // Trigger fast repaint
@@ -1609,6 +1671,7 @@ class _NeonSurvivalPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final stopwatch = Stopwatch()..start();
     canvas.save();
     canvas.scale(size.width / 800.0, size.height / 600.0);
 
@@ -1814,7 +1877,80 @@ class _NeonSurvivalPainter extends CustomPainter {
       breakdownPainter.paint(canvas, Offset((800.0 - breakdownPainter.width) / 2, 320.0));
     }
 
+    // Stop paint timer
+    stopwatch.stop();
+    if (state.widget.perfLoggingEnabled) {
+      final paintMs = stopwatch.elapsedMicroseconds / 1000.0;
+      state._lastPaintMs = paintMs;
+      state._paintMsHistory.add(paintMs);
+
+      _drawPerformanceHUD(canvas, const Size(800.0, 600.0));
+    }
+
     canvas.restore();
+  }
+
+  void _drawPerformanceHUD(Canvas canvas, Size size) {
+    final double hudWidth = 180.0;
+    final double hudHeight = 90.0;
+    final double rx = size.width - hudWidth - 15.0;
+    final double ry = 15.0;
+
+    // Background panel
+    final bgPaint = Paint()
+      ..color = const Color(0xE6070B16) // Dark semi-transparent
+      ..style = PaintingStyle.fill;
+    final borderPaint = Paint()
+      ..color = const Color(0xFF06B6D4).withOpacity(0.5) // Cyan border
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(rx, ry, hudWidth, hudHeight),
+        const Radius.circular(8),
+      ),
+      bgPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(rx, ry, hudWidth, hudHeight),
+        const Radius.circular(8),
+      ),
+      borderPaint,
+    );
+
+    // Compute metrics
+    final double currentFps = state._fpsHistory.isNotEmpty ? state._fpsHistory.last : 60.0;
+    final double updateMs = state._lastUpdateMs;
+    final double paintMs = state._lastPaintMs;
+    final int enemies = state._enemies.length;
+    final int bullets = state._bullets.length;
+    final int particles = state._particles.length;
+
+    // Render Text
+    final textStyle = const TextStyle(
+      color: Colors.white,
+      fontSize: 10,
+      fontFamily: 'monospace',
+      fontWeight: FontWeight.bold,
+    );
+
+    void drawLineText(String label, String val, Color valColor, double offset) {
+      final labelSpan = TextSpan(text: label, style: textStyle.copyWith(color: Colors.white60));
+      final labelPainter = TextPainter(text: labelSpan, textDirection: TextDirection.ltr)..layout();
+      labelPainter.paint(canvas, Offset(rx + 10, ry + 8 + offset));
+
+      final valSpan = TextSpan(text: val, style: textStyle.copyWith(color: valColor));
+      final valPainter = TextPainter(text: valSpan, textDirection: TextDirection.ltr)..layout();
+      valPainter.paint(canvas, Offset(rx + hudWidth - valPainter.width - 10, ry + 8 + offset));
+    }
+
+    drawLineText('FPS:', currentFps.toStringAsFixed(1), currentFps > 55 ? const Color(0xFF10B981) : (currentFps > 35 ? const Color(0xFFF59E0B) : const Color(0xFFEF4444)), 0.0);
+    drawLineText('UPDATE TIME:', '${updateMs.toStringAsFixed(2)}ms', updateMs < 5.0 ? const Color(0xFF10B981) : const Color(0xFFEF4444), 16.0);
+    drawLineText('PAINT TIME:', '${paintMs.toStringAsFixed(2)}ms', paintMs < 8.0 ? const Color(0xFF10B981) : const Color(0xFFEF4444), 32.0);
+    drawLineText('ENEMIES/BULLETS:', '$enemies / $bullets', const Color(0xFF06B6D4), 48.0);
+    drawLineText('PARTICLES:', '$particles', const Color(0xFFEC4899), 64.0);
   }
 
   void _drawPortal(Canvas canvas, double x, double y, bool isVertical, double glowValue) {

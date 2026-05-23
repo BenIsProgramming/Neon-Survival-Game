@@ -1,30 +1,33 @@
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
+import 'dart:typed_list';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 
-// Cached file paths for each sound effect
 final Map<String, String> _soundFiles = {};
+final List<AudioPlayer> _playerPool = [];
+int _nextPlayerIndex = 0;
+const int _poolSize = 8;
 
 Future<void> initAudioEngineImpl() async {
-  try {
-    final tempDir = await getTemporaryDirectory();
-    final sampleRate = 22050;
+  final dir = await getTemporaryDirectory();
+  final dirPath = dir.path;
+  
+  await _initSound('playLaser', () => _generateLaser(22050), dirPath);
+  await _initSound('playEnemyLaser', () => _generateEnemyLaser(22050), dirPath);
+  await _initSound('playExplosion', () => _generateExplosion(22050), dirPath);
+  await _initSound('playHit', () => _generateHit(22050), dirPath);
+  await _initSound('playPowerUp', () => _generatePowerUp(22050), dirPath);
+  await _initSound('playGameOver', () => _generateGameOver(22050), dirPath);
 
-    // Generate and save each sound effect if not already created
-    await _generateAndSave('playLaser', () => _generateLaser(sampleRate), tempDir.path);
-    await _generateAndSave('playEnemyLaser', () => _generateEnemyLaser(sampleRate), tempDir.path);
-    await _generateAndSave('playExplosion', () => _generateExplosion(sampleRate), tempDir.path);
-    await _generateAndSave('playHit', () => _generateHit(sampleRate), tempDir.path);
-    await _generateAndSave('playPowerUp', () => _generatePowerUp(sampleRate), tempDir.path);
-    await _generateAndSave('playGameOver', () => _generateGameOver(sampleRate), tempDir.path);
-  } catch (e) {
-    stderr.writeln('Error initializing native audio: $e');
+  // Pre-allocate audio player pool
+  _playerPool.clear();
+  for (int i = 0; i < _poolSize; i++) {
+    _playerPool.add(AudioPlayer());
   }
 }
 
-Future<void> _generateAndSave(String name, List<double> Function() generator, String dirPath) async {
+Future<void> _initSound(String name, List<double> Function() generator, String dirPath) async {
   final filePath = '$dirPath/neon_$name.wav';
   final file = File(filePath);
   
@@ -42,14 +45,13 @@ void playSfxImpl(String name, double volume) {
   if (filePath == null) return;
 
   try {
-    final player = AudioPlayer();
-    // Auto-dispose when sound completes to avoid resource leaks
-    player.onPlayerComplete.listen((_) {
-      player.dispose();
-    });
-    // Set source and play with adjusted volume
-    player.play(DeviceFileSource(filePath), volume: volume).catchError((err) {
-      player.dispose();
+    if (_playerPool.isEmpty) return;
+    
+    final player = _playerPool[_nextPlayerIndex];
+    _nextPlayerIndex = (_nextPlayerIndex + 1) % _poolSize;
+
+    player.stop().then((_) {
+      player.play(DeviceFileSource(filePath), volume: volume);
     });
   } catch (_) {
     // Ignore native playback errors (e.g. headless runners/no audio device)

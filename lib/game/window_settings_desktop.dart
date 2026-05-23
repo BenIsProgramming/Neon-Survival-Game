@@ -35,6 +35,16 @@ Future<void> setWindowSizeImpl(double width, double height) async {
 
 Future<void> setFullScreenImpl(bool fullscreen) async {
   await windowManager.setFullScreen(fullscreen);
+  if (!fullscreen) {
+    await windowManager.restore();
+    final prefs = await SharedPreferences.getInstance();
+    final double width = prefs.getDouble('neon_settings_window_width') ?? 1280;
+    final double height = prefs.getDouble('neon_settings_window_height') ?? 720;
+    await windowManager.setSize(Size(width, height));
+    await windowManager.center();
+    await windowManager.show();
+    await windowManager.focus();
+  }
   
   final prefs = await SharedPreferences.getInstance();
   await prefs.setBool('neon_settings_fullscreen', fullscreen);
