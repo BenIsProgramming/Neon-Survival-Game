@@ -17,9 +17,10 @@ class MainMenuScreen extends StatefulWidget {
 class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   int _activePanel = 0; // 0: Title, 1: Co-op Setup, 2: Leaderboard, 3: How to Play, 4: Settings
-
+  
   // Lobby Config
   String _difficulty = 'normal';
+  bool _isHardcore = false;
   final List<bool> _slotsActive = [true, false, false, false];
   final List<String> _playerNames = ['P1_APEX', 'P2_NEON', 'P3_GLOW', 'P4_SPARK'];
   final List<Color> _playerColors = [
@@ -121,6 +122,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
           sfxVolume: _sfxVolume,
           screenShakeEnabled: _screenShake,
           colorblindFilter: _colorblindFilter,
+          isHardcore: _isHardcore,
           onQuit: () {
             Navigator.pop(context);
             _loadHighScores();
@@ -310,7 +312,36 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
               _buildDiffOption('hard', const Color(0xFFEF4444)),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 8),
+
+          // Hardcore Mode Selector Row
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text('HARDCORE MODE:  ', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
+              Switch(
+                value: _isHardcore,
+                onChanged: (val) {
+                  setState(() {
+                    _isHardcore = val;
+                  });
+                },
+                activeColor: const Color(0xFFEF4444),
+                activeTrackColor: const Color(0xFFEF4444).withOpacity(0.25),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                _isHardcore ? 'ON (ONE-HIT DEATH, NO INVULN)' : 'OFF',
+                style: TextStyle(
+                  color: _isHardcore ? const Color(0xFFEF4444) : Colors.white38,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
 
           // 4 Player Slots Configuration (cards expanded slightly to prevent overlaps)
           Expanded(
