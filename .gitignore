@@ -1,0 +1,24 @@
+# Standard Flutter/Dart .gitignore
+
+.dart_tool/
+.packages
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# Compilation builds
+build/
+
+# Tooling configs
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Local configuration files
+.env
+local.properties
+
+# Log files
+*.log
