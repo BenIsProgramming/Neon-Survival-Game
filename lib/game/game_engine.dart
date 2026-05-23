@@ -2156,7 +2156,7 @@ class _GamePickup {
   double y;
   final String type; // 'health', 'life', 'spread', 'laser', 'plasma'
   final int ammoAmount;
-  double timer;
+  double timer = 12.0;
 
   _GamePickup({
     required this.id,
@@ -2164,7 +2164,6 @@ class _GamePickup {
     required this.y,
     required this.type,
     required this.ammoAmount,
-    this.timer = 12.0,
   });
 }
 
