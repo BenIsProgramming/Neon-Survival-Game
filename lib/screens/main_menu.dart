@@ -76,6 +76,23 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
       _musicVolume = prefs.getDouble('neon_settings_music_volume') ?? 0.5;
       _screenShake = prefs.getBool('neon_settings_screen_shake') ?? true;
       _colorblindFilter = prefs.getString('neon_settings_colorblind_filter') ?? 'none';
+
+      // Load lobby configuration
+      _difficulty = prefs.getString('neon_lobby_difficulty') ?? 'normal';
+      _isHardcore = prefs.getBool('neon_lobby_is_hardcore') ?? false;
+      _mapType = prefs.getString('neon_lobby_map_type') ?? 'grid';
+      for (int i = 0; i < 4; i++) {
+        _playerNames[i] = prefs.getString('neon_lobby_player_${i}_name') ?? _playerNames[i];
+        _slotsActive[i] = prefs.getBool('neon_lobby_player_${i}_active') ?? (i == 0);
+        final deviceName = prefs.getString('neon_lobby_player_${i}_device');
+        if (deviceName != null) {
+          final deviceType = InputDeviceType.values.firstWhere(
+            (e) => e.name == deviceName,
+            orElse: () => _inputProfiles[i].deviceType,
+          );
+          _inputProfiles[i] = _inputProfiles[i].copyWith(deviceType: deviceType);
+        }
+      }
     });
   }
 
@@ -85,6 +102,18 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
     await prefs.setDouble('neon_settings_music_volume', _musicVolume);
     await prefs.setBool('neon_settings_screen_shake', _screenShake);
     await prefs.setString('neon_settings_colorblind_filter', _colorblindFilter);
+  }
+
+  Future<void> _saveLobbyConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (int i = 0; i < 4; i++) {
+      await prefs.setString('neon_lobby_player_${i}_name', _playerNames[i]);
+      await prefs.setBool('neon_lobby_player_${i}_active', _slotsActive[i]);
+      await prefs.setString('neon_lobby_player_${i}_device', _inputProfiles[i].deviceType.name);
+    }
+    await prefs.setString('neon_lobby_difficulty', _difficulty);
+    await prefs.setBool('neon_lobby_is_hardcore', _isHardcore);
+    await prefs.setString('neon_lobby_map_type', _mapType);
   }
 
   @override
@@ -344,6 +373,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                   setState(() {
                     _isHardcore = val;
                   });
+                  _saveLobbyConfig();
                 },
                 activeColor: const Color(0xFFEF4444),
                 activeTrackColor: const Color(0xFFEF4444).withOpacity(0.25),
@@ -401,7 +431,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
         label: Text(diff.toUpperCase()),
         selected: isSelected,
         onSelected: (val) {
-          if (val) setState(() => _difficulty = diff);
+          if (val) {
+            setState(() => _difficulty = diff);
+            _saveLobbyConfig();
+          }
         },
         selectedColor: activeColor.withOpacity(0.35),
         backgroundColor: const Color(0xFF0C1324),
@@ -426,7 +459,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
         label: Text(displayName, style: const TextStyle(fontSize: 10)),
         selected: isSelected,
         onSelected: (val) {
-          if (val) setState(() => _mapType = mapType);
+          if (val) {
+            setState(() => _mapType = mapType);
+            _saveLobbyConfig();
+          }
         },
         selectedColor: activeColor.withOpacity(0.35),
         backgroundColor: const Color(0xFF0C1324),
@@ -473,6 +509,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                   setState(() {
                     _slotsActive[index] = val;
                   });
+                  _saveLobbyConfig();
                 },
                 activeColor: pColor,
                 activeTrackColor: pColor.withOpacity(0.25),
@@ -522,7 +559,10 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                 ),
                 controller: TextEditingController(text: _playerNames[index])
                   ..selection = TextSelection.fromPosition(TextPosition(offset: _playerNames[index].length)),
-                onChanged: (val) => _playerNames[index] = val,
+                onChanged: (val) {
+                  _playerNames[index] = val;
+                  _saveLobbyConfig();
+                },
               ),
             ),
             const SizedBox(height: 12),
@@ -532,6 +572,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<InputDeviceType>(
                   value: _inputProfiles[index].deviceType,
+                  isExpanded: true,
+                  isDense: true,
                   dropdownColor: const Color(0xFF0F172A),
                   style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                   onChanged: (InputDeviceType? val) {
@@ -539,6 +581,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                       setState(() {
                         _inputProfiles[index] = _inputProfiles[index].copyWith(deviceType: val);
                       });
+                      _saveLobbyConfig();
                     }
                   },
                   items: const [
@@ -647,42 +690,74 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                 ),
                 const SizedBox(height: 18),
 
-                // Color-blind filter dropdown selection
+                // Color-blind filter dropdown selection (fully clickable)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0A0F1D),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: const Color(0xFF1E293B)),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'COLOR-BLIND FILTER',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<String>(
+                      value: _colorblindFilter,
+                      isExpanded: true,
+                      isDense: true,
+                      dropdownColor: const Color(0xFF0F172A),
+                      icon: const Padding(
+                        padding: EdgeInsets.only(right: 16.0),
+                        child: Icon(Icons.arrow_drop_down, color: Color(0xFF06B6D4)),
                       ),
-                      DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: _colorblindFilter,
-                          dropdownColor: const Color(0xFF0F172A),
-                          style: const TextStyle(color: Color(0xFF06B6D4), fontWeight: FontWeight.bold, fontSize: 12),
-                          onChanged: (val) {
-                            if (val != null) {
-                              setState(() {
-                                _colorblindFilter = val;
-                              });
-                            }
-                          },
-                          items: const [
-                            DropdownMenuItem(value: 'none', child: Text('NONE')),
-                            DropdownMenuItem(value: 'protanopia', child: Text('PROTANOPIA (RED-BLIND)')),
-                            DropdownMenuItem(value: 'deuteranopia', child: Text('DEUTERANOPIA (GREEN-BLIND)')),
-                            DropdownMenuItem(value: 'tritanopia', child: Text('TRITANOPIA (BLUE-BLIND)')),
-                          ],
-                        ),
-                      )
-                    ],
+                      selectedItemBuilder: (BuildContext context) {
+                        final itemsMap = {
+                          'none': 'NONE',
+                          'protanopia': 'PROTANOPIA (RED-BLIND)',
+                          'deuteranopia': 'DEUTERANOPIA (GREEN-BLIND)',
+                          'tritanopia': 'TRITANOPIA (BLUE-BLIND)',
+                        };
+                        return itemsMap.entries.map<Widget>((e) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            alignment: Alignment.centerLeft,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  'COLOR-BLIND FILTER',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                                Text(
+                                  e.value,
+                                  style: const TextStyle(
+                                    color: Color(0xFF06B6D4),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 12,
+                                    fontFamily: 'monospace',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList();
+                      },
+                      items: const [
+                        DropdownMenuItem(value: 'none', child: Text('NONE')),
+                        DropdownMenuItem(value: 'protanopia', child: Text('PROTANOPIA (RED-BLIND)')),
+                        DropdownMenuItem(value: 'deuteranopia', child: Text('DEUTERANOPIA (GREEN-BLIND)')),
+                        DropdownMenuItem(value: 'tritanopia', child: Text('TRITANOPIA (BLUE-BLIND)')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() {
+                            _colorblindFilter = val;
+                          });
+                        }
+                      },
+                    ),
                   ),
                 ),
               ],
@@ -1010,47 +1085,63 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
     ValueChanged<String> onChanged,
   ) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
       decoration: BoxDecoration(
         color: const Color(0xFF0C1324),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFF334155), width: 1),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$label: ',
-            style: const TextStyle(
-              color: Colors.white30,
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
-            ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: currentValue,
+          isDense: true,
+          dropdownColor: const Color(0xFF0A0F1D),
+          icon: const Padding(
+            padding: EdgeInsets.only(right: 8.0, left: 4.0),
+            child: Icon(Icons.arrow_drop_down, color: Colors.cyanAccent, size: 16),
           ),
-          DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: currentValue,
-              icon: const Icon(Icons.arrow_drop_down, color: Colors.cyanAccent, size: 16),
-              dropdownColor: const Color(0xFF0A0F1D),
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'monospace',
-              ),
-              items: options.entries.map((e) {
-                return DropdownMenuItem<String>(
-                  value: e.key,
-                  child: Text(e.value),
-                );
-              }).toList(),
-              onChanged: (val) {
-                if (val != null) onChanged(val);
-              },
-            ),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'monospace',
           ),
-        ],
+          selectedItemBuilder: (BuildContext context) {
+            return options.entries.map<Widget>((e) {
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                alignment: Alignment.center,
+                child: RichText(
+                  text: TextSpan(
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'monospace',
+                    ),
+                    children: [
+                      TextSpan(
+                        text: '$label: ',
+                        style: const TextStyle(color: Colors.white30),
+                      ),
+                      TextSpan(
+                        text: e.value,
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList();
+          },
+          items: options.entries.map((e) {
+            return DropdownMenuItem<String>(
+              value: e.key,
+              child: Text(e.value),
+            );
+          }).toList(),
+          onChanged: (val) {
+            if (val != null) onChanged(val);
+          },
+        ),
       ),
     );
   }
