@@ -236,6 +236,11 @@
         osc.stop(ctx.currentTime + 0.75);
       } catch(e) { console.error(e); }
     }
+
+    // Block right-click context menu to prevent key-lock issues
+    window.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+    }, false);
   </script>
 </head>
 <body>

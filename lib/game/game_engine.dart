@@ -93,7 +93,7 @@ class NeonSurvivalEngine extends StatefulWidget {
   State<NeonSurvivalEngine> createState() => _NeonSurvivalEngineState();
 }
 
-class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTickerProviderStateMixin {
+class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late Ticker _ticker;
   final RepaintNotifier _repaintNotifier = RepaintNotifier();
   Duration _lastDuration = Duration.zero;
@@ -159,6 +159,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _players = widget.initialPlayers;
     
     // Copy parameters from main menu settings
@@ -274,8 +275,24 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      // Pause the game if playing
+      if (!_isGameOver && !_isPaused) {
+        setState(() {
+          _isPaused = true;
+        });
+      }
+      // Reset inputs to avoid stuck keys
+      _pressedKeys.clear();
+      _isPrimaryMousePressed = false;
+    }
   }
 
   void _onTick(Duration duration) {
