@@ -1,14 +1,17 @@
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'input_profile.dart';
 import 'leaderboard.dart';
+import 'dart:js' as js;
 
 class Player {
   final int id;
   final String name;
-  final Color color;
+  Color color;
   final InputProfile inputProfile;
 
   double x;
@@ -58,12 +61,18 @@ class RepaintNotifier extends ChangeNotifier {
 class NeonSurvivalEngine extends StatefulWidget {
   final List<Player> initialPlayers;
   final String difficulty;
+  final double sfxVolume;
+  final bool screenShakeEnabled;
+  final String colorblindFilter;
   final VoidCallback onQuit;
 
   const NeonSurvivalEngine({
     Key? key,
     required this.initialPlayers,
     required this.difficulty,
+    required this.sfxVolume,
+    required this.screenShakeEnabled,
+    required this.colorblindFilter,
     required this.onQuit,
   }) : super(key: key);
 
@@ -75,6 +84,11 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   late Ticker _ticker;
   final RepaintNotifier _repaintNotifier = RepaintNotifier();
   Duration _lastDuration = Duration.zero;
+
+  // Mid-game Settings state
+  late double _activeSfxVolume;
+  late bool _activeScreenShake;
+  late String _activeColorblindFilter;
 
   // Throttled HUD update state
   int _lastCombinedScore = 0;
@@ -96,6 +110,8 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   double _elapsedTime = 0.0;
   double _lastSpawnTime = 0.0;
   bool _isGameOver = false;
+  bool _isPaused = false;
+  bool _showSettingsInPause = false;
 
   // Doors visual glow intensity
   double _topDoorGlow = 0.0;
@@ -126,6 +142,12 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   void initState() {
     super.initState();
     _players = widget.initialPlayers;
+    
+    // Copy parameters from main menu settings
+    _activeSfxVolume = widget.sfxVolume;
+    _activeScreenShake = widget.screenShakeEnabled;
+    _activeColorblindFilter = widget.colorblindFilter;
+
     _setupInitialPlayerStats();
 
     // Start game tick
@@ -155,6 +177,8 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       _players[i].reset(spawnPos.dx, spawnPos.dy, maxHp);
     }
     _isGameOver = false;
+    _isPaused = false;
+    _showSettingsInPause = false;
     _enemies.clear();
     _bullets.clear();
     _particles.clear();
@@ -164,6 +188,15 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     _cameraX = (arenaWidth / 2) - 400.0;
     _cameraY = (arenaHeight / 2) - 300.0;
     _zoomLevel = 1.0;
+  }
+
+  // Synthesized audio helper
+  void _playSfx(String jsFunctionName) {
+    if (kIsWeb) {
+      try {
+        js.context.callMethod(jsFunctionName, [_activeSfxVolume]);
+      } catch (_) {}
+    }
   }
 
   @override
@@ -185,11 +218,12 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     if (dt > 0.1) dt = 0.1;
     if (dt <= 0.0) dt = 0.01667;
 
-    _updatePhysics(dt);
-    _updateParticles(dt);
-
-    // Dynamic camera centroid and zoom calculation
-    _updateCamera();
+    // Skip physical game loops when paused
+    if (!_isPaused) {
+      _updatePhysics(dt);
+      _updateParticles(dt);
+      _updateCamera();
+    }
 
     // Trigger fast repaint
     _repaintNotifier.triggerRepaint();
@@ -268,7 +302,6 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
         if (nearest != null) {
           p.aimPosition = Offset(nearest.x, nearest.y);
         } else {
-          // Default to aiming straight up
           p.aimPosition = Offset(p.x, p.y - 100.0);
         }
       }
@@ -276,7 +309,6 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       // Shooting mechanics
       bool wantsToShoot = false;
       if (p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
-        // Mouse aiming shoots automatically while holding Space or trigger click (handled in gesturedetector)
         if (_pressedKeys.contains(LogicalKeyboardKey.space)) {
           wantsToShoot = true;
         }
@@ -305,12 +337,11 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       return;
     }
 
-    // 2. Clamp players to the camera bounds (Vampire Survivors shared-screen style)
+    // 2. Clamp players to the camera bounds
     _clampPlayersToViewport();
 
     // 3. Enemy Spawning Logic
     double baseSpawnInterval = widget.difficulty.toLowerCase() == 'easy' ? 4.0 : (widget.difficulty.toLowerCase() == 'hard' ? 1.8 : 2.8);
-    // Dynamic difficulty increase
     double spawnInterval = max(0.4, baseSpawnInterval - (_elapsedTime * 0.015));
     if (_elapsedTime - _lastSpawnTime > spawnInterval) {
       _lastSpawnTime = _elapsedTime;
@@ -323,13 +354,12 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       b.x += b.vx * dt;
       b.y += b.vy * dt;
 
-      // Clean up out of bounds bullets
       if (b.x < -50 || b.x > arenaWidth + 50 || b.y < -50 || b.y > arenaHeight + 50) {
         _bullets.removeAt(i);
       }
     }
 
-    // 5. Update Enemies (chase nearest player)
+    // 5. Update Enemies
     for (int i = _enemies.length - 1; i >= 0; i--) {
       final e = _enemies[i];
 
@@ -354,40 +384,41 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
           e.y -= edy * e.speed * dt;
         }
 
-        // Shooter shoots
         if (_elapsedTime - e.lastShotTime > 1.8) {
           e.lastShotTime = _elapsedTime;
           _fireEnemyBullet(e.x, e.y, target.x, target.y);
         }
       } else {
-        // Runners / Tanks chase directly
         e.x += edx * e.speed * dt;
         e.y += edy * e.speed * dt;
       }
 
-      // Constrain inside boundaries once entered
       if (e.x >= 0.0 && e.x <= arenaWidth && e.y >= 0.0 && e.y <= arenaHeight) {
         e.x = e.x.clamp(12.0, arenaWidth - 12.0);
         e.y = e.y.clamp(12.0, arenaHeight - 12.0);
       }
 
-      // Collision with player
       double colDist = e.type == 'tank' ? 24.0 : 16.0;
       if (dist < colDist) {
         double damage = e.type == 'tank' ? 25.0 : 12.0;
         target.health = max(0.0, target.health - damage * dt * 5.0);
+        
+        // play periodic hurt hit sound
+        if (_random.nextDouble() < 0.08) {
+          _playSfx('playHit');
+        }
+        
         if (target.health <= 0) {
           _killPlayer(target);
         }
       }
     }
 
-    // 6. Check Bullet-Player and Bullet-Enemy Collisions
+    // 6. Check Bullet Collisions
     for (int bi = _bullets.length - 1; bi >= 0; bi--) {
       final b = _bullets[bi];
 
       if (b.isEnemy) {
-        // Hits player?
         for (final p in _players) {
           if (!p.isAlive) continue;
           double dx = b.x - p.x;
@@ -397,6 +428,8 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
             p.health = max(0.0, p.health - 12.0);
             _bullets.removeAt(bi);
             _spawnLocalExplosion(b.x, b.y, Colors.redAccent, count: 5);
+            _playSfx('playHit');
+
             if (p.health <= 0) {
               _killPlayer(p);
             }
@@ -404,7 +437,6 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
           }
         }
       } else {
-        // Hits enemy?
         for (int ei = _enemies.length - 1; ei >= 0; ei--) {
           final e = _enemies[ei];
           double dx = b.x - e.x;
@@ -416,9 +448,11 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
             e.health -= 1.0;
             _bullets.removeAt(bi);
             _spawnLocalExplosion(b.x, b.y, _rainbowColors[_random.nextInt(_rainbowColors.length)], count: 4);
+            _playSfx('playHit');
 
             if (e.health <= 0) {
               _enemies.removeAt(ei);
+              _playSfx('playExplosion');
               if (b.owner != null) {
                 b.owner!.score += e.type == 'tank' ? 50 : (e.type == 'shooter' ? 30 : 10);
               }
@@ -435,7 +469,6 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     final alive = _players.where((p) => p.isAlive).toList();
     if (alive.isEmpty) return;
 
-    // Centroid calculation
     double sumX = 0;
     double sumY = 0;
     for (final p in alive) {
@@ -445,7 +478,6 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     double targetCamX = (sumX / alive.length) - 400.0;
     double targetCamY = (sumY / alive.length) - 300.0;
 
-    // Dynamic Zoom calculation based on spread distance
     double maxSpread = 0.0;
     for (int i = 0; i < alive.length; i++) {
       for (int j = i + 1; j < alive.length; j++) {
@@ -456,23 +488,20 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
 
     double targetZoom = 1.0;
     if (alive.length > 1) {
-      double factor = (maxSpread - 100.0) / 600.0; // map 100px - 700px spread
+      double factor = (maxSpread - 100.0) / 600.0;
       factor = factor.clamp(0.0, 1.0);
-      targetZoom = 1.2 - (factor * 0.45); // zoom scales from 1.2x (close) down to 0.75x (apart)
+      targetZoom = 1.2 - (factor * 0.45);
     }
 
-    // Smooth camera and zoom interpolation
     _cameraX += (targetCamX - _cameraX) * 0.12;
     _cameraY += (targetCamY - _cameraY) * 0.12;
     _zoomLevel += (targetZoom - _zoomLevel) * 0.08;
 
-    // Clamp camera within physical boundary limits
     _cameraX = _cameraX.clamp(0.0, arenaWidth - 800.0);
     _cameraY = _cameraY.clamp(0.0, arenaHeight - 600.0);
   }
 
   void _clampPlayersToViewport() {
-    // Determine boundaries of visible screen area at current zoom
     double halfWidth = 400.0 / _zoomLevel;
     double halfHeight = 300.0 / _zoomLevel;
     double centerX = _cameraX + 400.0;
@@ -506,7 +535,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
 
   _GameEnemy? _findNearestEnemyTo(double x, double y) {
     _GameEnemy? nearest;
-    double minDist = 360.0; // auto range locking limit
+    double minDist = 360.0;
     for (final e in _enemies) {
       double dist = sqrt(pow(e.x - x, 2) + pow(e.y - y, 2));
       if (dist < minDist) {
@@ -536,6 +565,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       owner: p,
     ));
 
+    _playSfx('playLaser');
     _spawnLocalExplosion(p.x + dx * 16.0, p.y + dy * 16.0, p.color, count: 2);
   }
 
@@ -565,22 +595,22 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     int portalEdge = _random.nextInt(4);
 
     switch (portalEdge) {
-      case 0: // Top
+      case 0:
         x = arenaWidth / 2;
         y = -10.0;
         _topDoorGlow = 1.0;
         break;
-      case 1: // Right
+      case 1:
         x = arenaWidth + 10.0;
         y = arenaHeight / 2;
         _rightDoorGlow = 1.0;
         break;
-      case 2: // Bottom
+      case 2:
         x = arenaWidth / 2;
         y = arenaHeight + 10.0;
         _bottomDoorGlow = 1.0;
         break;
-      case 3: // Left
+      case 3:
         x = -10.0;
         y = arenaHeight / 2;
         _leftDoorGlow = 1.0;
@@ -616,13 +646,14 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       type: type,
       speed: speed,
     ));
+    _playSfx('playHit'); // subtle warp gate beep
   }
 
   void _killPlayer(Player p) {
     p.lives--;
+    _playSfx('playExplosion');
     _spawnLocalExplosion(p.x, p.y, p.color, count: 25);
     if (p.lives > 0) {
-      // Respawn at arena center
       p.health = p.maxHealth;
       p.x = arenaWidth / 2;
       p.y = arenaHeight / 2;
@@ -634,6 +665,7 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
   void _triggerGameOver() {
     if (_isGameOver) return;
     _isGameOver = true;
+    _playSfx('playGameOver');
 
     // Save score entries locally
     int totalCombinedScore = _players.fold(0, (sum, p) => sum + p.score);
@@ -647,9 +679,41 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     });
   }
 
+  void _togglePause() {
+    setState(() {
+      _isPaused = !_isPaused;
+      _showSettingsInPause = false;
+    });
+    _playSfx('playHit');
+  }
+
+  Future<void> _saveMidGameSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('neon_settings_sfx_volume', _activeSfxVolume);
+    await prefs.setBool('neon_settings_screen_shake', _activeScreenShake);
+    await prefs.setString('neon_settings_colorblind_filter', _activeColorblindFilter);
+  }
+
   void _handleKeyEvent(KeyEvent event) {
-    if (_isGameOver) return;
     if (event is KeyDownEvent) {
+      // Toggle Pause with Escape key
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        if (!_isGameOver) {
+          _togglePause();
+        }
+        return;
+      }
+
+      // Controller start button equivalent key capture
+      if (event.logicalKey == LogicalKeyboardKey.gameButtonStart || event.logicalKey == LogicalKeyboardKey.select) {
+        if (!_isGameOver) {
+          _togglePause();
+        }
+        return;
+      }
+
+      if (_isGameOver || _isPaused) return;
+
       _pressedKeys.add(event.logicalKey);
       
       // Handle manual fire for mouse players on space press
@@ -703,88 +767,94 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
     return Scaffold(
       backgroundColor: const Color(0xFF02040A),
       body: SafeArea(
-        child: Column(
+        child: Stack(
           children: [
-            // Top HUD
-            _buildHudBar(),
-            const SizedBox(height: 12),
+            Column(
+              children: [
+                // Top HUD
+                _buildHudBar(),
+                const SizedBox(height: 12),
 
-            // Gameplay Canvas Boundary
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  double scale = min(
-                    constraints.maxWidth / 800.0,
-                    constraints.maxHeight / 600.0,
-                  );
-                  double w = 800.0 * scale;
-                  double h = 600.0 * scale;
+                // Gameplay Canvas Boundary
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      double scale = min(
+                        constraints.maxWidth / 800.0,
+                        constraints.maxHeight / 600.0,
+                      );
+                      double w = 800.0 * scale;
+                      double h = 600.0 * scale;
 
-                  Widget canvasWidget = KeyboardListener(
-                    focusNode: FocusNode()..requestFocus(),
-                    onKeyEvent: _handleKeyEvent,
-                    child: MouseRegion(
-                      onHover: (e) {
-                        if (_isGameOver) return;
-                        final RenderBox box = context.findRenderObject() as RenderBox;
-                        final localPos = box.globalToLocal(e.position);
-                        double canvasLeft = (constraints.maxWidth - w) / 2;
-                        double canvasTop = (constraints.maxHeight - h) / 2;
+                      Widget canvasWidget = KeyboardListener(
+                        focusNode: FocusNode()..requestFocus(),
+                        onKeyEvent: _handleKeyEvent,
+                        child: MouseRegion(
+                          onHover: (e) {
+                            if (_isGameOver || _isPaused) return;
+                            final RenderBox box = context.findRenderObject() as RenderBox;
+                            final localPos = box.globalToLocal(e.position);
+                            double canvasLeft = (constraints.maxWidth - w) / 2;
+                            double canvasTop = (constraints.maxHeight - h) / 2;
 
-                        double viewportX = (localPos.dx - canvasLeft) / scale;
-                        double viewportY = (localPos.dy - canvasTop) / scale;
+                            double viewportX = (localPos.dx - canvasLeft) / scale;
+                            double viewportY = (localPos.dy - canvasTop) / scale;
 
-                        // Give P1 mouse aim if P1 is using keyboardMouse
-                        for (final p in _players) {
-                          if (p.isAlive && p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
-                            p.lastMouseViewportPos = Offset(viewportX, viewportY);
-                          }
-                        }
-                        _repaintNotifier.triggerRepaint();
-                      },
-                      child: GestureDetector(
-                        onTapDown: (_) {
-                          if (_isGameOver) return;
-                          for (final p in _players) {
-                            if (p.isAlive && p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
-                              _firePlayerBullet(p);
-                              p.lastShotTime = _elapsedTime;
+                            for (final p in _players) {
+                              if (p.isAlive && p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
+                                p.lastMouseViewportPos = Offset(viewportX, viewportY);
+                              }
                             }
-                          }
-                        },
-                        child: Container(
-                          width: w,
-                          height: h,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF060A13),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: const Color(0xFF1E293B),
-                              width: 3,
-                            ),
-                          ),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(13),
-                            child: RepaintBoundary(
-                              child: CustomPaint(
-                                size: const Size(800.0, 600.0),
-                                painter: _NeonSurvivalPainter(
-                                  state: this,
+                            _repaintNotifier.triggerRepaint();
+                          },
+                          child: GestureDetector(
+                            onTapDown: (_) {
+                              if (_isGameOver || _isPaused) return;
+                              for (final p in _players) {
+                                if (p.isAlive && p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
+                                  _firePlayerBullet(p);
+                                  p.lastShotTime = _elapsedTime;
+                                }
+                              }
+                            },
+                            child: Container(
+                              width: w,
+                              height: h,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF060A13),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFF1E293B),
+                                  width: 3,
+                                ),
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(13),
+                                child: RepaintBoundary(
+                                  child: CustomPaint(
+                                    size: const Size(800.0, 600.0),
+                                    painter: _NeonSurvivalPainter(
+                                      state: this,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  );
+                      );
 
-                  return Center(child: canvasWidget);
-                },
-              ),
+                      return Center(child: canvasWidget);
+                    },
+                  ),
+                ),
+
+                if (_isGameOver) _buildGameOverPanel(),
+              ],
             ),
 
-            if (_isGameOver) _buildGameOverPanel(),
+            // Settings and options Pause overlay
+            if (_isPaused) _buildPauseOverlay(),
           ],
         ),
       ),
@@ -805,8 +875,12 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white70),
-            onPressed: widget.onQuit,
+            icon: const Icon(Icons.pause, color: Colors.white70),
+            onPressed: () {
+              if (!_isGameOver) {
+                _togglePause();
+              }
+            },
           ),
           Column(
             children: [
@@ -911,6 +985,177 @@ class _NeonSurvivalEngineState extends State<NeonSurvivalEngine> with SingleTick
       ),
     );
   }
+
+  // Multi-option pause overlay panel
+  Widget _buildPauseOverlay() {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.75),
+        child: Center(
+          child: Container(
+            width: 420,
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0C1324),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0xFF1E293B), width: 2),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF38BDF8).withOpacity(0.1),
+                  blurRadius: 20,
+                  spreadRadius: 1,
+                )
+              ],
+            ),
+            child: _showSettingsInPause ? _buildPauseSettingsView() : _buildPauseMainView(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPauseMainView() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'MISSION PAUSED',
+          style: TextStyle(
+            color: Color(0xFF38BDF8),
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2.0,
+            shadows: [Shadow(color: Color(0xFF38BDF8), blurRadius: 8)],
+          ),
+        ),
+        const SizedBox(height: 32),
+        _buildPauseButton('RESUME', _togglePause, const Color(0xFF10B981)),
+        const SizedBox(height: 14),
+        _buildPauseButton('SETTINGS', () {
+          setState(() {
+            _showSettingsInPause = true;
+          });
+        }, const Color(0xFF06B6D4)),
+        const SizedBox(height: 14),
+        _buildPauseButton('ABANDON MISSION', widget.onQuit, const Color(0xFFEF4444)),
+      ],
+    );
+  }
+
+  Widget _buildPauseSettingsView() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'MID-GAME SETTINGS',
+          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 20),
+
+        // SFX volume slider
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('SFX VOLUME', style: TextStyle(color: Colors.white70, fontSize: 11)),
+                Text('${(_activeSfxVolume * 100).round()}%', style: const TextStyle(color: Color(0xFF06B6D4), fontSize: 11)),
+              ],
+            ),
+            Slider(
+              value: _activeSfxVolume,
+              onChanged: (val) {
+                setState(() {
+                  _activeSfxVolume = val;
+                });
+                _playSfx('playLaser');
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+
+        // Screen Shake Toggle
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('SCREEN SHAKE', style: TextStyle(color: Colors.white70, fontSize: 12)),
+            Switch(
+              value: _activeScreenShake,
+              onChanged: (val) {
+                setState(() {
+                  _activeScreenShake = val;
+                });
+              },
+              activeColor: const Color(0xFF06B6D4),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+
+        // Color-blind filter select
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text('COLORBLIND FILTER', style: TextStyle(color: Colors.white70, fontSize: 12)),
+            DropdownButton<String>(
+              value: _activeColorblindFilter,
+              dropdownColor: const Color(0xFF0C1324),
+              onChanged: (val) {
+                if (val != null) {
+                  setState(() {
+                    _activeColorblindFilter = val;
+                  });
+                }
+              },
+              items: const [
+                DropdownMenuItem(value: 'none', child: Text('NONE')),
+                DropdownMenuItem(value: 'protanopia', child: Text('PROTANOPIA')),
+                DropdownMenuItem(value: 'deuteranopia', child: Text('DEUTERANOPIA')),
+                DropdownMenuItem(value: 'tritanopia', child: Text('TRITANOPIA')),
+              ],
+            )
+          ],
+        ),
+        const SizedBox(height: 24),
+
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () {
+                _saveMidGameSettings();
+                setState(() {
+                  _showSettingsInPause = false;
+                });
+              },
+              child: const Text('BACK', style: TextStyle(color: Colors.white60)),
+            ),
+          ],
+        )
+      ],
+    );
+  }
+
+  Widget _buildPauseButton(String text, VoidCallback onPressed, Color color) {
+    return SizedBox(
+      width: 220,
+      height: 42,
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(color: color.withOpacity(0.5), width: 1.5),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          backgroundColor: const Color(0xFF060A13),
+        ),
+        onPressed: onPressed,
+        child: Text(
+          text,
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.0, fontSize: 13),
+        ),
+      ),
+    );
+  }
 }
 
 class _NeonSurvivalPainter extends CustomPainter {
@@ -951,6 +1196,38 @@ class _NeonSurvivalPainter extends CustomPainter {
     required this.state,
   }) : super(repaint: state._repaintNotifier);
 
+  // Helper to color shift based on the active colorblind settings filter
+  Color _getFilteredColor(Color original) {
+    final filter = state._activeColorblindFilter;
+    if (filter == 'none') return original;
+
+    // Protanopia adjustments (Red-Blind shift reds to blue/amber)
+    if (filter == 'protanopia') {
+      if (original.value == 0xFFEF4444 || original == Colors.red || original == Colors.redAccent) {
+        return const Color(0xFF3B82F6); // Shift Red to vibrant Blue
+      }
+      if (original.value == 0xFFEC4899 || original == Colors.pink || original == Colors.pinkAccent) {
+        return const Color(0xFFF59E0B); // Shift Pink to orange-amber
+      }
+    }
+
+    // Deuteranopia adjustments (Green-Blind shift greens to blue)
+    if (filter == 'deuteranopia') {
+      if (original.value == 0xFF10B981 || original == Colors.green || original == Colors.greenAccent) {
+        return const Color(0xFF3B82F6); // Shift Green to Blue
+      }
+    }
+
+    // Tritanopia adjustments (Blue-Blind shift cyans/blues to pinks)
+    if (filter == 'tritanopia') {
+      if (original.value == 0xFF06B6D4 || original == Colors.cyan || original == Colors.cyanAccent) {
+        return const Color(0xFFEC4899); // Shift Cyan to Pink
+      }
+    }
+
+    return original;
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     // 1. Initial Scale to cover the layout constraints size
@@ -958,6 +1235,9 @@ class _NeonSurvivalPainter extends CustomPainter {
     canvas.scale(size.width / 800.0, size.height / 600.0);
 
     // 2. Zoom & Camera Centroid Translation
+    // Double save ensures that when we restore, the camera translate falls off, centering overlays
+    canvas.save();
+    
     // Scale and translate relative to screen center (400, 300)
     canvas.translate(400.0, 300.0);
     canvas.scale(state._zoomLevel);
@@ -980,7 +1260,7 @@ class _NeonSurvivalPainter extends CustomPainter {
 
     // Draw Particles
     for (final p in state._particles) {
-      _particlePaint.color = p.color.withOpacity(p.life);
+      _particlePaint.color = _getFilteredColor(p.color).withOpacity(p.life);
       canvas.drawCircle(Offset(p.x, p.y), p.size * p.life, _particlePaint);
     }
 
@@ -998,14 +1278,16 @@ class _NeonSurvivalPainter extends CustomPainter {
     for (final p in state._players) {
       if (!p.isAlive) continue;
 
+      final pColor = _getFilteredColor(p.color);
+
       // Halo
-      _playerHaloPaint.color = p.color.withOpacity(0.18);
+      _playerHaloPaint.color = pColor.withOpacity(0.18);
       canvas.drawCircle(Offset(p.x, p.y), 24, _playerHaloPaint);
 
       // Ship fill and rim
-      _playerPaint.color = p.color.withOpacity(0.85);
+      _playerPaint.color = pColor.withOpacity(0.85);
       canvas.drawCircle(Offset(p.x, p.y), 13, _playerPaint);
-      _playerRimPaint.color = p.color;
+      _playerRimPaint.color = pColor;
       canvas.drawCircle(Offset(p.x, p.y), 13, _playerRimPaint);
       canvas.drawCircle(Offset(p.x, p.y), 5, _playerCorePaint);
 
@@ -1030,20 +1312,19 @@ class _NeonSurvivalPainter extends CustomPainter {
 
       // Aim Line & Reticle
       if (p.inputProfile.deviceType == InputDeviceType.keyboardMouse) {
-        _laserPaint.color = p.color.withOpacity(0.2);
+        _laserPaint.color = pColor.withOpacity(0.2);
         canvas.drawLine(Offset(p.x, p.y), p.aimPosition, _laserPaint);
-        _crosshairPaint.color = p.color;
+        _crosshairPaint.color = pColor;
         canvas.drawCircle(p.aimPosition, 5.0, _crosshairPaint);
         canvas.drawCircle(p.aimPosition, 1.5, _crosshairDotPaint);
       } else {
-        // Subtle dotted ring or pointer in direction of aim
-        _laserPaint.color = p.color.withOpacity(0.08);
+        _laserPaint.color = pColor.withOpacity(0.08);
         canvas.drawCircle(Offset(p.x, p.y), 60.0, _laserPaint);
       }
 
       // Draw active player lives as tiny dots above health bar
       for (int i = 0; i < p.lives; i++) {
-        canvas.drawCircle(Offset(p.x - 14 + (i * 14), p.y - 36), 2.5, Paint()..color = p.color);
+        canvas.drawCircle(Offset(p.x - 14 + (i * 14), p.y - 36), 2.5, Paint()..color = pColor);
       }
     }
 
@@ -1057,9 +1338,10 @@ class _NeonSurvivalPainter extends CustomPainter {
     _drawPortal(canvas, 0, _NeonSurvivalEngineState.arenaHeight / 2, true, state._leftDoorGlow);
     _drawPortal(canvas, _NeonSurvivalEngineState.arenaWidth, _NeonSurvivalEngineState.arenaHeight / 2, true, state._rightDoorGlow);
 
-    canvas.restore(); // Centroid camera scale/translation
+    // Restore translates back to standard 800x600 space for Overlay rendering
+    canvas.restore();
 
-    // Game Over fixed Screen overlay
+    // Game Over centered Screen overlay (Correctly placed under standard 800x600 scaled coordinates)
     if (state._isGameOver) {
       canvas.drawRect(const Rect.fromLTWH(0, 0, 800.0, 600.0), _bgOverlayPaint);
 
@@ -1100,7 +1382,8 @@ class _NeonSurvivalPainter extends CustomPainter {
       scorePainter.paint(canvas, Offset((800.0 - scorePainter.width) / 2, 300.0));
     }
 
-    canvas.restore(); // Frame boundaries
+    // Restore initial constraints scale
+    canvas.restore();
   }
 
   void _drawPortal(Canvas canvas, double x, double y, bool isVertical, double glowValue) {
@@ -1117,8 +1400,10 @@ class _NeonSurvivalPainter extends CustomPainter {
 
   void _drawSingleBullet(Canvas canvas, double bx, double by, bool isEnemy, Color? playerColor) {
     final Color bulletColor = isEnemy ? const Color(0xFFEC4899) : (playerColor ?? const Color(0xFF06B6D4));
-    _bulletPaint.color = bulletColor;
-    _bulletGlowPaint.color = bulletColor.withOpacity(0.35);
+    final Color shiftedColor = _getFilteredColor(bulletColor);
+    
+    _bulletPaint.color = shiftedColor;
+    _bulletGlowPaint.color = shiftedColor.withOpacity(0.35);
     _bulletGlowPaint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
 
     canvas.drawCircle(Offset(bx, by), 8.0, _bulletGlowPaint);
@@ -1140,9 +1425,11 @@ class _NeonSurvivalPainter extends CustomPainter {
       rad = 14.0;
     }
 
-    _enemyFillPaint.color = col.withOpacity(0.15);
-    _enemyStrokePaint.color = col;
-    _enemyGlowPaint.color = col.withOpacity(0.22);
+    final Color shiftedColor = _getFilteredColor(col);
+
+    _enemyFillPaint.color = shiftedColor.withOpacity(0.15);
+    _enemyStrokePaint.color = shiftedColor;
+    _enemyGlowPaint.color = shiftedColor.withOpacity(0.22);
     _enemyGlowPaint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
 
     canvas.drawCircle(Offset(ex, ey), rad + 2.0, _enemyGlowPaint);
@@ -1166,7 +1453,7 @@ class _NeonSurvivalPainter extends CustomPainter {
 
     if (hp < maxHp && hp > 0) {
       canvas.drawRect(Rect.fromLTWH(ex - 15, ey - rad - 9, 30, 3.5), _enemyHpBgPaint);
-      _enemyHpFillPaint.color = col;
+      _enemyHpFillPaint.color = shiftedColor;
       canvas.drawRect(Rect.fromLTWH(ex - 15, ey - rad - 9, 30 * (hp / maxHp), 3.5), _enemyHpFillPaint);
     }
   }

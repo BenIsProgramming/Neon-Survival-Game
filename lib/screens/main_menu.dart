@@ -1,9 +1,11 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../game/input_profile.dart';
 import '../game/game_engine.dart';
 import '../game/leaderboard.dart';
+import 'dart:js' as js;
 
 class MainMenuScreen extends StatefulWidget {
   const MainMenuScreen({Key? key}) : super(key: key);
@@ -14,7 +16,7 @@ class MainMenuScreen extends StatefulWidget {
 
 class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
-  int _activePanel = 0; // 0: Title, 1: Co-op Setup, 2: Leaderboard, 3: How to Play
+  int _activePanel = 0; // 0: Title, 1: Co-op Setup, 2: Leaderboard, 3: How to Play, 4: Settings
 
   // Lobby Config
   String _difficulty = 'normal';
@@ -36,6 +38,12 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
   // Leaderboard data
   List<ScoreEntry> _highScores = [];
 
+  // Settings state variables
+  double _sfxVolume = 0.7;
+  double _musicVolume = 0.5;
+  bool _screenShake = true;
+  String _colorblindFilter = 'none';
+
   @override
   void initState() {
     super.initState();
@@ -44,6 +52,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
     _loadHighScores();
+    _loadSettings();
   }
 
   Future<void> _loadHighScores() async {
@@ -51,6 +60,24 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
     setState(() {
       _highScores = list;
     });
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _sfxVolume = prefs.getDouble('neon_settings_sfx_volume') ?? 0.7;
+      _musicVolume = prefs.getDouble('neon_settings_music_volume') ?? 0.5;
+      _screenShake = prefs.getBool('neon_settings_screen_shake') ?? true;
+      _colorblindFilter = prefs.getString('neon_settings_colorblind_filter') ?? 'none';
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('neon_settings_sfx_volume', _sfxVolume);
+    await prefs.setDouble('neon_settings_music_volume', _musicVolume);
+    await prefs.setBool('neon_settings_screen_shake', _screenShake);
+    await prefs.setString('neon_settings_colorblind_filter', _colorblindFilter);
   }
 
   @override
@@ -91,6 +118,9 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
         builder: (_) => NeonSurvivalEngine(
           initialPlayers: activePlayers,
           difficulty: _difficulty,
+          sfxVolume: _sfxVolume,
+          screenShakeEnabled: _screenShake,
+          colorblindFilter: _colorblindFilter,
           onQuit: () {
             Navigator.pop(context);
             _loadHighScores();
@@ -152,6 +182,8 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
         return _buildLeaderboardPanel();
       case 3:
         return _buildHowToPlayPanel();
+      case 4:
+        return _buildSettingsPanel();
       default:
         return _buildTitlePanel();
     }
@@ -195,11 +227,13 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
             letterSpacing: 3.5,
           ),
         ),
-        const SizedBox(height: 48),
+        const SizedBox(height: 40),
         _buildMenuButton('LAUNCH MISSION', 1, Colors.cyanAccent),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
+        _buildMenuButton('SETTINGS', 4, Colors.redAccent),
+        const SizedBox(height: 12),
         _buildMenuButton('LEADERBOARD', 2, Colors.amberAccent),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         _buildMenuButton('HOW TO PLAY', 3, Colors.purpleAccent),
       ],
     );
@@ -208,7 +242,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
   Widget _buildMenuButton(String text, int targetPanel, Color glowColor) {
     return SizedBox(
       width: 250,
-      height: 48,
+      height: 44,
       child: OutlinedButton(
         style: OutlinedButton.styleFrom(
           side: BorderSide(color: glowColor.withOpacity(0.5), width: 1.5),
@@ -226,7 +260,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
             color: Colors.white,
             fontWeight: FontWeight.bold,
             letterSpacing: 1.5,
-            fontSize: 14,
+            fontSize: 13,
             shadows: [
               Shadow(color: glowColor.withOpacity(0.6), blurRadius: 4),
             ],
@@ -278,7 +312,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
           ),
           const SizedBox(height: 20),
 
-          // 4 Player Slots Configuration
+          // 4 Player Slots Configuration (cards expanded slightly to prevent overlaps)
           Expanded(
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -339,7 +373,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
     Color pColor = _playerColors[index];
 
     return Container(
-      width: 155,
+      width: 162, // Card width increased from 155 to 162 to avoid horizontal dropdown overflows
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: active ? const Color(0xFF0D162B) : const Color(0xFF070B13),
@@ -419,7 +453,7 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
             ),
             const SizedBox(height: 12),
 
-            // Input Device Selection
+            // Input Device Selection (text tags shortened to prevent card overlaps)
             Expanded(
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<InputDeviceType>(
@@ -434,14 +468,215 @@ class _MainMenuScreenState extends State<MainMenuScreen> with SingleTickerProvid
                     }
                   },
                   items: const [
-                    DropdownMenuItem(value: InputDeviceType.keyboardMouse, child: Text('KEYBOARD + MOUSE')),
-                    DropdownMenuItem(value: InputDeviceType.keyboardKeys, child: Text('KEYBOARD KEYS')),
-                    DropdownMenuItem(value: InputDeviceType.gamepad, child: Text('GAMEPAD CONTROLLER')),
+                    DropdownMenuItem(value: InputDeviceType.keyboardMouse, child: Text('KBD + MOUSE')),
+                    DropdownMenuItem(value: InputDeviceType.keyboardKeys, child: Text('KBD KEYS')),
+                    DropdownMenuItem(value: InputDeviceType.gamepad, child: Text('GAMEPAD')),
                   ],
                 ),
               ),
             ),
           ]
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // PANEL 4: PERSISTED SETTINGS PANEL
+  // ==========================================
+
+  Widget _buildSettingsPanel() {
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white70),
+                onPressed: () {
+                  _saveSettings();
+                  setState(() => _activePanel = 0);
+                },
+              ),
+              const Text(
+                'SYSTEM SETTINGS',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2.0,
+                ),
+              ),
+              const SizedBox(width: 48),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Expanded(
+            child: ListView(
+              children: [
+                // SFX Volume Slider
+                _buildSliderSetting(
+                  label: 'SOUND FX VOLUME',
+                  value: _sfxVolume,
+                  onChanged: (val) {
+                    setState(() {
+                      _sfxVolume = val;
+                    });
+                    // Play test beep on slide adjust
+                    try {
+                      js.context.callMethod('playLaser', [_sfxVolume]);
+                    } catch (_) {}
+                  },
+                ),
+                const SizedBox(height: 18),
+
+                // Music Volume Slider
+                _buildSliderSetting(
+                  label: 'MUSIC VOLUME (NOT USED)',
+                  value: _musicVolume,
+                  onChanged: (val) {
+                    setState(() {
+                      _musicVolume = val;
+                    });
+                  },
+                ),
+                const SizedBox(height: 18),
+
+                // Screen Shake Toggle
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0A0F1D),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF1E293B)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'SCREEN SHAKE',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      Switch(
+                        value: _screenShake,
+                        onChanged: (val) {
+                          setState(() {
+                            _screenShake = val;
+                          });
+                        },
+                        activeColor: const Color(0xFF06B6D4),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                // Color-blind filter dropdown selection
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0A0F1D),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF1E293B)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'COLOR-BLIND FILTER',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _colorblindFilter,
+                          dropdownColor: const Color(0xFF0F172A),
+                          style: const TextStyle(color: Color(0xFF06B6D4), fontWeight: FontWeight.bold, fontSize: 12),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setState(() {
+                                _colorblindFilter = val;
+                              });
+                            }
+                          },
+                          items: const [
+                            DropdownMenuItem(value: 'none', child: Text('NONE')),
+                            DropdownMenuItem(value: 'protanopia', child: Text('PROTANOPIA (RED-BLIND)')),
+                            DropdownMenuItem(value: 'deuteranopia', child: Text('DEUTERANOPIA (GREEN-BLIND)')),
+                            DropdownMenuItem(value: 'tritanopia', child: Text('TRITANOPIA (BLUE-BLIND)')),
+                          ],
+                        ),
+                      )
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: 200,
+            height: 45,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF06B6D4),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () {
+                _saveSettings();
+                setState(() => _activePanel = 0);
+              },
+              child: const Text('SAVE & CLOSE', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSliderSetting({
+    required String label,
+    required double value,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A0F1D),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF1E293B)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              Text(
+                '${(value * 100).round()}%',
+                style: const TextStyle(color: Color(0xFF06B6D4), fontWeight: FontWeight.bold, fontSize: 13, fontFamily: 'monospace'),
+              ),
+            ],
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: const Color(0xFF06B6D4),
+              inactiveTrackColor: const Color(0xFF1E293B),
+              thumbColor: Colors.white,
+              overlayColor: const Color(0xFF06B6D4).withOpacity(0.12),
+            ),
+            child: Slider(
+              value: value,
+              min: 0.0,
+              max: 1.0,
+              onChanged: onChanged,
+            ),
+          ),
         ],
       ),
     );
